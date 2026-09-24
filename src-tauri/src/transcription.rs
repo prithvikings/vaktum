@@ -1,3 +1,4 @@
+use crate::cleanup;
 use anyhow::{anyhow, Context, Result};
 use hound::WavReader;
 use std::path::{Path, PathBuf};
@@ -86,7 +87,7 @@ impl WhisperTranscriber {
             .full(params, &audio)
             .map_err(|e| anyhow!("Whisper transcription failed: {e}"))?;
 
-        let transcript = state
+        let raw_transcript = state
             .as_iter()
             .map(|segment| segment.to_string())
             .collect::<Vec<_>>()
@@ -94,8 +95,14 @@ impl WhisperTranscriber {
             .trim()
             .to_owned();
 
-        if transcript.is_empty() {
+        if raw_transcript.is_empty() {
             return Err(anyhow!("Whisper transcription failed: no transcript was produced"));
+        }
+
+        let transcript = cleanup::clean_transcript(&raw_transcript);
+
+        if transcript.is_empty() {
+            return Err(anyhow!("Whisper transcription failed: cleanup produced an empty transcript"));
         }
 
         eprintln!("[INFO] Transcription completed");
