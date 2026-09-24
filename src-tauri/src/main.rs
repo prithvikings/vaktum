@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod audio;
+mod cleanup;
 mod transcription;
 
 use std::sync::{Arc, Mutex};
