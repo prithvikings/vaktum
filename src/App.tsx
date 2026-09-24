@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import type { VaktumState } from "./lib/types";
+import { commands } from "./lib/tauri";
 
 export default function App() {
   const [state, setState] = useState<VaktumState>("idle");
   const [recordingPath, setRecordingPath] = useState("");
+  const [transcript, setTranscript] = useState("");
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -12,6 +14,7 @@ export default function App() {
     void Promise.all([
       listen("vaktum://recording-started", () => {
         setError("");
+        setTranscript("");
         setRecordingPath("");
         setState("recording");
       }),
@@ -31,6 +34,23 @@ export default function App() {
     return () => unlisten.forEach((stop) => stop());
   }, []);
 
+  const transcribe = async () => {
+    if (!recordingPath || state === "transcribing") return;
+
+    setError("");
+    setTranscript("");
+    setState("transcribing");
+
+    try {
+      const result = await commands.transcribeRecording(recordingPath);
+      setTranscript(result);
+      setState("idle");
+    } catch (cause) {
+      setError(String(cause));
+      setState("error");
+    }
+  };
+
   return (
     <main className="app">
       <header>
@@ -43,7 +63,17 @@ export default function App() {
 
       <section className="card">
         <small>Status</small>
-        <strong>{state === "recording" ? "Listening..." : state === "processing" ? "Recording stopped" : state === "error" ? "Error" : "Ready"}</strong>
+        <strong>
+          {state === "recording"
+            ? "Listening..."
+            : state === "processing"
+              ? "Recording stopped"
+              : state === "transcribing"
+                ? "Transcribing..."
+                : state === "error"
+                  ? "Error"
+                  : "Ready"}
+        </strong>
         {error && <p className="error">{error}</p>}
       </section>
 
@@ -57,6 +87,16 @@ export default function App() {
         <section className="card">
           <small>Latest recording</small>
           <code>{recordingPath}</code>
+          <button type="button" onClick={() => void transcribe()} disabled={state === "transcribing"}>
+            {state === "transcribing" ? "Transcribing..." : "Transcribe"}
+          </button>
+        </section>
+      )}
+
+      {transcript && (
+        <section className="card">
+          <small>Transcript</small>
+          <p>{transcript}</p>
         </section>
       )}
     </main>
