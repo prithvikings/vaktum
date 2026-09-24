@@ -1,0 +1,1 @@
+export type VaktumState="idle"|"recording"|"processing"|"transcribing"|"inserting"|"error"; export type AppConfig={hotkey:string;microphone:string;language:string;model:string;whisper_binary:string;history_enabled:boolean}; export type HistoryEntry={timestamp:string;raw_transcript:string;final_transcript:string};
