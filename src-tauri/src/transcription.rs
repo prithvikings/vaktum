@@ -103,6 +103,16 @@ impl WhisperTranscriber {
     }
 }
 
+pub fn latest_recording_path() -> Result<PathBuf> {
+    let local_app_data = std::env::var_os("LOCALAPPDATA")
+        .ok_or_else(|| anyhow!("LOCALAPPDATA is unavailable"))?;
+
+    Ok(PathBuf::from(local_app_data)
+        .join("Vaktum")
+        .join("recordings")
+        .join("latest.wav"))
+}
+
 pub fn configured_model_path() -> Result<PathBuf> {
     if let Some(path) = std::env::var_os(MODEL_ENV) {
         if path.is_empty() {
