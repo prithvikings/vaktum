@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod audio;
+mod transcription;
 
 use std::sync::{Arc, Mutex};
 use tauri::{Emitter, State};
@@ -13,6 +14,20 @@ fn recording_start(state: State<'_, AppState>) -> Result<(), String> { audio::st
 
 #[tauri::command]
 fn recording_stop(state: State<'_, AppState>) -> Result<String, String> { audio::stop(&state.recorder).map(|p| p.display().to_string()).map_err(|e| e.to_string()) }
+
+#[tauri::command]
+async fn transcribe_recording(path: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let transcriber = transcription::WhisperTranscriber::from_environment()
+            .map_err(|e| e.to_string())?;
+
+        transcriber
+            .transcribe(path)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("Whisper transcription task failed: {e}"))?
+}
 
 fn main() {
     let recorder = Arc::new(Mutex::new(audio::Recorder::default()));
@@ -40,7 +55,7 @@ fn main() {
         eprintln!("[INFO] Global hotkey registered: Ctrl+Shift+Space");
         Ok(())
       })
-      .invoke_handler(tauri::generate_handler![recording_start, recording_stop])
+      .invoke_handler(tauri::generate_handler![recording_start, recording_stop, transcribe_recording])
       .run(tauri::generate_context!())
       .expect("error while running Vaktum");
 }
