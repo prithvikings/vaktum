@@ -1,1 +1,6 @@
-import{invoke}from"@tauri-apps/api/core";export const commands={configGet:()=>invoke("config_get"),configSave:(config:unknown)=>invoke("config_save",{config}),transcribe:()=>invoke("transcribe_recording"),insertText:(text:string)=>invoke("insert_text",{text}),historyList:()=>invoke("history_list")};
+import { invoke } from "@tauri-apps/api/core";
+
+export const commands = {
+  recordingStart: () => invoke("recording_start"),
+  recordingStop: () => invoke<string>("recording_stop"),
+};
