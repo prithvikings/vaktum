@@ -16,6 +16,13 @@ fn recording_start(state: State<'_, AppState>) -> Result<(), String> { audio::st
 fn recording_stop(state: State<'_, AppState>) -> Result<String, String> { audio::stop(&state.recorder).map(|p| p.display().to_string()).map_err(|e| e.to_string()) }
 
 #[tauri::command]
+fn latest_recording_path() -> Result<String, String> {
+    transcription::latest_recording_path()
+        .map(|path| path.display().to_string())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn transcribe_recording(path: String) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let transcriber = transcription::WhisperTranscriber::from_environment()
@@ -55,7 +62,7 @@ fn main() {
         eprintln!("[INFO] Global hotkey registered: Ctrl+Shift+Space");
         Ok(())
       })
-      .invoke_handler(tauri::generate_handler![recording_start, recording_stop, transcribe_recording])
+      .invoke_handler(tauri::generate_handler![recording_start, recording_stop, latest_recording_path, transcribe_recording])
       .run(tauri::generate_context!())
       .expect("error while running Vaktum");
 }
