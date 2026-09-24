@@ -11,6 +11,10 @@ export default function App() {
 
   useEffect(() => {
     let unlisten: Array<() => void> = [];
+
+    void commands.latestRecordingPath()
+      .then(setRecordingPath)
+      .catch(() => undefined);
     void Promise.all([
       listen("vaktum://recording-started", () => {
         setError("");
