@@ -6,6 +6,7 @@ use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextPar
 const MODEL_ENV: &str = "VAKTUM_WHISPER_MODEL";
 const DEFAULT_MODEL_FILE: &str = "ggml-base.en.bin";
 
+#[derive(Debug)]
 pub struct WhisperTranscriber {
     model_path: PathBuf,
 }
