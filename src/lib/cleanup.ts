@@ -1,0 +1,1 @@
+export function cleanupTranscript(input:string):string{let text=input.replace(/\\s+/gu," ").trim();if(!text)return "";text=text.replace(/\\s+([,.!?;:])/gu,"$1").replace(/([,.!?;:])([^\\s])/gu,"$1 $2");text=text.replace(/\\b(\\p{L}+)(?:\\s+\\1){2,}\\b/giu,"$1");text=text.replace(/(^|[.!?]\\s+)(\\p{L})/gu,(_,p,l)=>p+l.toUpperCase());return text;}
