@@ -32,15 +32,45 @@ pub fn start(rec: &Arc<Mutex<Recorder>>) -> Result<()> {
         let err_fn = |e| eprintln!("[ERROR] microphone stream: {e}");
 
         let stream_result = match format {
-            SampleFormat::F32 => device.build_input_stream(&config, move |data: &[f32], _| push_samples(&target, data, channels), err_fn, None),
-            SampleFormat::I16 => device.build_input_stream(&config, move |data: &[i16], _| {
-                let values = data.iter().map(|s| *s as f32 / i16::MAX as f32).collect::<Vec<_>>();
-                push_samples(&target, &values, channels);
-            }, err_fn, None),
-            SampleFormat::U16 => device.build_input_stream(&config, move |data: &[u16], _| {
-                let values = data.iter().map(|s| (*s as f32 / u16::MAX as f32) * 2.0 - 1.0).collect::<Vec<_>>();
-                push_samples(&target, &values, channels);
-            }, err_fn, None),
+            SampleFormat::F32 => {
+                let callback_target = Arc::clone(&target);
+                device.build_input_stream(
+                    &config,
+                    move |data: &[f32], _| {
+                        push_samples(&callback_target, data, channels);
+                    },
+                    err_fn,
+                    None,
+                )
+            }
+            SampleFormat::I16 => {
+                let callback_target = Arc::clone(&target);
+                device.build_input_stream(
+                    &config,
+                    move |data: &[i16], _| {
+                        let values = data.iter()
+                            .map(|s| *s as f32 / i16::MAX as f32)
+                            .collect::<Vec<_>>();
+                        push_samples(&callback_target, &values, channels);
+                    },
+                    err_fn,
+                    None,
+                )
+            }
+            SampleFormat::U16 => {
+                let callback_target = Arc::clone(&target);
+                device.build_input_stream(
+                    &config,
+                    move |data: &[u16], _| {
+                        let values = data.iter()
+                            .map(|s| (*s as f32 / u16::MAX as f32) * 2.0 - 1.0)
+                            .collect::<Vec<_>>();
+                        push_samples(&callback_target, &values, channels);
+                    },
+                    err_fn,
+                    None,
+                )
+            }
             _ => Err(cpal::BuildStreamError::StreamConfigNotSupported),
         };
 
