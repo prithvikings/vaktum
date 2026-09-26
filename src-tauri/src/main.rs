@@ -10,6 +10,7 @@ mod transcription;
 
 use std::{
     sync::{Arc, Mutex},
+    thread,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -188,7 +189,14 @@ fn save_config(
 
         let recorder = state.recorder.clone();
         let target = state.target_window.clone();
-        if let Err(error) = register_hotkey(&app, parsed_shortcut, recorder, target, state.config.clone()) {
+        if let Err(error) = register_hotkey(
+            &app,
+            parsed_shortcut,
+            recorder,
+            target,
+            state.config.clone(),
+            state.streaming_session.clone(),
+        ) {
             let _ = register_hotkey(
                 &app,
                 old_hotkey
@@ -260,17 +268,6 @@ fn register_hotkey(
         .on_shortcut(shortcut, move |_app, _shortcut, event: ShortcutEvent| {
             match event.state() {
                 ShortcutState::Pressed => {
-                    if let Ok(window) = insertion::capture_target_window() {
-                        if let Ok(mut target) = target_window.lock() {
-                            *target = Some(window);
-                        }
-                    }
-
-                    let microphone = config
-                        .lock()
-                        .map(|value| value.microphone.clone())
-                        .unwrap_or_else(|_| "default".to_owned());
-
                     let target_window_id = match insertion::capture_target_window() {
                         Ok(window) => {
                             if let Ok(mut target) = target_window.lock() {
@@ -287,11 +284,6 @@ fn register_hotkey(
                             return;
                         }
                     };
-
-                    let microphone = config
-                        .lock()
-                        .map(|value| value.microphone.clone())
-                        .unwrap_or_else(|_| "default".to_owned());
 
                     let configured = config
                         .lock()
