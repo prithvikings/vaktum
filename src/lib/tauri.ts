@@ -5,4 +5,5 @@ export const commands = {
   recordingStop: () => invoke<string>("recording_stop"),
   latestRecordingPath: () => invoke<string>("latest_recording_path"),
   transcribeRecording: (path: string) => invoke<string>("transcribe_recording", { path }),
+  insertText: (text: string) => invoke<void>("insert_text", { text }),
 };
