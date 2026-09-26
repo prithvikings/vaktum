@@ -241,17 +241,27 @@ pub fn stable_prefix(previous: &str, current: &str) -> String {
         // previous hypothesis is stable. If it is still extending the same
         // word, only the earlier complete words are stable.
         if common_len == previous.len() {
-            if current.len() == common_len
-                || current[common_len..]
-                    .chars()
-                    .next()
-                    .is_some_and(|character| character.is_whitespace() || ".,!?;:)]}".contains(character))
+            if current.len() == common_len {
+                return common
+                    .rsplit_once(char::is_whitespace)
+                    .map(|(prefix, _)| prefix.trim_end().to_owned())
+                    .unwrap_or_default();
+            }
+
+            if current[common_len..]
+                .chars()
+                .next()
+                .is_some_and(|character| ".,!?;:)]}".contains(character))
             {
                 return previous.trim_end().to_owned();
             }
         }
 
-        if common.ends_with(char::is_whitespace) {
+        if current[common_len..]
+            .chars()
+            .next()
+            .is_some_and(char::is_whitespace)
+        {
             return common.trim_end().to_owned();
         }
 
