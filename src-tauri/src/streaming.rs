@@ -53,7 +53,7 @@ impl StreamingSession {
                 ) {
                     eprintln!("[ERROR] streaming dictation: {error}");
                     let _ = app.emit(
-                        "vaktum://streaming-error",
+                        "vaktum://streaming-fatal-error",
                         "Streaming dictation failed. Please try again.",
                     );
                 }
