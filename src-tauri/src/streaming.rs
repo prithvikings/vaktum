@@ -148,17 +148,10 @@ fn run(
     let _ = app.emit("vaktum://streaming-transcribing", ());
     let final_result = match transcriber.transcribe(&path) {
         Ok(result) => result,
-        Err(error) if is_empty_transcription_error(&error) => {
-            let _ = app.emit(
-                "vaktum://streaming-completed",
-                StreamingCompleted {
-                    raw_transcript: committed.clone(),
-                    final_transcript: committed.clone(),
-                    history_error: None,
-                },
-            );
-            return Ok(());
-        }
+        Err(error) if is_empty_transcription_error(&error) => transcription::TranscriptionResult {
+            raw_transcript: committed.clone(),
+            final_transcript: committed.clone(),
+        },
         Err(error) => return Err(error),
     };
 
