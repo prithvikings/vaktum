@@ -106,7 +106,7 @@ export default function App() {
       }),
       listen("vaktum://streaming-resume", () => {
         setState((current) =>
-          canTransition(current, "recording") ? transition(current, "recording") : current,
+          canTransition(current, "transcribing") ? transition(current, "transcribing") : current,
         );
       }),
       listen<{ transcript: string }>("vaktum://streaming-updated", (event) => {
