@@ -5,10 +5,12 @@ mod cleanup;
 mod config;
 mod history;
 mod insertion;
+mod streaming;
 mod transcription;
 
 use std::{
     sync::{Arc, Mutex},
+    thread,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -24,6 +26,8 @@ pub struct AppState {
     recorder: Arc<Mutex<audio::Recorder>>,
     target_window: Arc<Mutex<Option<i64>>>,
     config: Arc<Mutex<config::AppConfig>>,
+    streaming_session: Arc<Mutex<Option<streaming::StreamingSession>>>,
+    streaming_stopping: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[derive(serde::Serialize)]
@@ -80,7 +84,7 @@ async fn transcribe_recording(
     let transcription_config = config.clone();
 
     let result = tauri::async_runtime::spawn_blocking(move || {
-        let transcriber = transcription::WhisperTranscriber::from_config(&transcription_config)
+        let mut transcriber = transcription::WhisperTranscriber::from_config(&transcription_config)
             .map_err(|error| error.to_string())?;
 
         transcriber
@@ -186,7 +190,15 @@ fn save_config(
 
         let recorder = state.recorder.clone();
         let target = state.target_window.clone();
-        if let Err(error) = register_hotkey(&app, parsed_shortcut, recorder, target, state.config.clone()) {
+        if let Err(error) = register_hotkey(
+            &app,
+            parsed_shortcut,
+            recorder,
+            target,
+            state.config.clone(),
+            state.streaming_session.clone(),
+            state.streaming_stopping.clone(),
+        ) {
             let _ = register_hotkey(
                 &app,
                 old_hotkey
@@ -195,6 +207,8 @@ fn save_config(
                 state.recorder.clone(),
                 state.target_window.clone(),
                 state.config.clone(),
+                state.streaming_session.clone(),
+                state.streaming_stopping.clone(),
             );
 
             return Err(format!("Unable to update global hotkey: {error}"));
@@ -212,6 +226,8 @@ fn save_config(
                 state.recorder.clone(),
                 state.target_window.clone(),
                 state.config.clone(),
+                state.streaming_session.clone(),
+                state.streaming_stopping.clone(),
             );
         }
 
@@ -248,6 +264,8 @@ fn register_hotkey(
     recorder: Arc<Mutex<audio::Recorder>>,
     target_window: Arc<Mutex<Option<i64>>>,
     config: Arc<Mutex<config::AppConfig>>,
+    streaming_session: Arc<Mutex<Option<streaming::StreamingSession>>>,
+    streaming_stopping: Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<(), String> {
     let handle = app.clone();
 
@@ -255,22 +273,70 @@ fn register_hotkey(
         .on_shortcut(shortcut, move |_app, _shortcut, event: ShortcutEvent| {
             match event.state() {
                 ShortcutState::Pressed => {
-                    if let Ok(window) = insertion::capture_target_window() {
-                        if let Ok(mut target) = target_window.lock() {
-                            *target = Some(window);
-                        }
+                    if streaming_stopping.load(std::sync::atomic::Ordering::Acquire) {
+                        let _ = handle.emit(
+                            "vaktum://recording-error",
+                            "Previous dictation is still finishing. Please try again.",
+                        );
+                        return;
                     }
 
-                    let microphone = config
+                    if streaming_session
                         .lock()
-                        .map(|value| value.microphone.clone())
-                        .unwrap_or_else(|_| "default".to_owned());
+                        .ok()
+                        .map(|active| active.is_some())
+                        .unwrap_or(false)
+                    {
+                        return;
+                    }
+
+                    let target_window_id = match insertion::capture_target_window() {
+                        Ok(window) => {
+                            if let Ok(mut target) = target_window.lock() {
+                                *target = Some(window);
+                            }
+                            window
+                        }
+                        Err(error) => {
+                            eprintln!("[ERROR] target capture: {error}");
+                            let _ = handle.emit(
+                                "vaktum://recording-error",
+                                "No target application was captured.",
+                            );
+                            return;
+                        }
+                    };
+
+                    let configured = config
+                        .lock()
+                        .map(|value| value.clone())
+                        .unwrap_or_else(|_| config::AppConfig::default());
+
+                    let microphone = configured.microphone.clone();
 
                     match audio::start(&recorder, &microphone) {
-                        Ok(()) => {
-                            eprintln!("[INFO] Recording started");
-                            let _ = handle.emit("vaktum://recording-started", ());
-                        }
+                        Ok(()) => match streaming::StreamingSession::start(
+                            handle.clone(),
+                            recorder.clone(),
+                            target_window_id,
+                            configured,
+                        ) {
+                            Ok(session) => {
+                                if let Ok(mut active) = streaming_session.lock() {
+                                    *active = Some(session);
+                                }
+                                eprintln!("[INFO] Streaming dictation started");
+                                let _ = handle.emit("vaktum://recording-started", ());
+                            }
+                            Err(error) => {
+                                eprintln!("[ERROR] streaming start: {error}");
+                                let _ = audio::stop(&recorder);
+                                let _ = handle.emit(
+                                    "vaktum://recording-error",
+                                    "Unable to start streaming transcription.",
+                                );
+                            }
+                        },
                         Err(error) => {
                             eprintln!("[ERROR] recording start: {error}");
                             let _ = handle.emit(
@@ -280,20 +346,37 @@ fn register_hotkey(
                         }
                     }
                 }
-                ShortcutState::Released => match audio::stop(&recorder) {
-                    Ok(path) => {
-                        eprintln!("[INFO] Recording stopped");
-                        let _ = handle.emit(
-                            "vaktum://recording-stopped",
-                            path.display().to_string(),
-                        );
-                    }
-                    Err(error) => {
-                        eprintln!("[ERROR] recording stop: {error}");
-                        let _ = handle.emit(
-                            "vaktum://recording-error",
-                            "Unable to stop recording. Please try again.",
-                        );
+                ShortcutState::Released => {
+                    let session = streaming_session
+                        .lock()
+                        .ok()
+                        .and_then(|mut active| active.take());
+
+                    if let Some(session) = session {
+                        eprintln!("[INFO] Streaming dictation stopping");
+                        streaming_stopping.store(true, std::sync::atomic::Ordering::Release);
+                        let stopping = Arc::clone(&streaming_stopping);
+                        thread::spawn(move || {
+                            session.stop();
+                            stopping.store(false, std::sync::atomic::Ordering::Release);
+                        });
+                    } else {
+                        match audio::stop(&recorder) {
+                            Ok(path) => {
+                                eprintln!("[INFO] Recording stopped");
+                                let _ = handle.emit(
+                                    "vaktum://recording-stopped",
+                                    path.display().to_string(),
+                                );
+                            }
+                            Err(error) => {
+                                eprintln!("[ERROR] recording stop: {error}");
+                                let _ = handle.emit(
+                                    "vaktum://recording-error",
+                                    "Unable to stop recording. Please try again.",
+                                );
+                            }
+                        }
                     }
                 },
             }
@@ -313,12 +396,16 @@ fn main() {
     let recorder = Arc::new(Mutex::new(audio::Recorder::default()));
     let target_window = Arc::new(Mutex::new(None));
     let config = Arc::new(Mutex::new(config::load()));
+    let streaming_session = Arc::new(Mutex::new(None));
+    let streaming_stopping = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
     tauri::Builder::default()
         .manage(AppState {
             recorder: recorder.clone(),
             target_window: target_window.clone(),
             config: config.clone(),
+            streaming_session: streaming_session.clone(),
+            streaming_stopping: streaming_stopping.clone(),
         })
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(move |app| {
@@ -340,6 +427,8 @@ fn main() {
                 recorder.clone(),
                 target_window.clone(),
                 config.clone(),
+                streaming_session.clone(),
+                streaming_stopping.clone(),
             )?;
 
             let show = MenuItem::with_id(

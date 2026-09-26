@@ -94,6 +94,46 @@ export default function App() {
         setRecordingPath(event.payload);
         move("processing");
       }),
+      listen("vaktum://streaming-transcribing", () => {
+        setState((current) =>
+          canTransition(current, "transcribing") ? transition(current, "transcribing") : current,
+        );
+      }),
+      listen("vaktum://streaming-inserting", () => {
+        setState((current) =>
+          canTransition(current, "inserting") ? transition(current, "inserting") : current,
+        );
+      }),
+      listen("vaktum://streaming-resume", () => {
+        setState((current) =>
+          canTransition(current, "transcribing") ? transition(current, "transcribing") : current,
+        );
+      }),
+      listen<{ transcript: string }>("vaktum://streaming-updated", (event) => {
+        setTranscript(event.payload.transcript);
+        setRawTranscript(event.payload.transcript);
+      }),
+      listen<{ raw_transcript: string; final_transcript: string; history_error?: string | null }>(
+        "vaktum://streaming-completed",
+        (event) => {
+          setRawTranscript(event.payload.raw_transcript);
+          setTranscript(event.payload.final_transcript);
+          if (event.payload.history_error) setError(event.payload.history_error);
+          void loadHistory();
+          setState((current) =>
+            canTransition(current, "idle") ? transition(current, "idle") : current,
+          );
+        },
+      ),
+      listen<string>("vaktum://streaming-error", (event) => {
+        setError(event.payload);
+      }),
+      listen<string>("vaktum://streaming-fatal-error", (event) => {
+        setError(event.payload);
+        setState((current) =>
+          canTransition(current, "error") ? transition(current, "error") : "error",
+        );
+      }),
       listen<string>("vaktum://recording-error", (event) => {
         setError(event.payload);
         setState((current) => canTransition(current, "error") ? transition(current, "error") : "error");
@@ -222,7 +262,7 @@ export default function App() {
           <section className="card">
             <small>Hotkey</small>
             <strong>{config.hotkey}</strong>
-            <p>Hold the global shortcut while speaking. Release it to save the recording.</p>
+            <p>Hold the global shortcut while speaking. Text is inserted automatically into the captured application.</p>
           </section>
 
           {recordingPath && (
@@ -237,7 +277,7 @@ export default function App() {
 
           {transcript && (
             <section className="card">
-              <small>Transcript</small>
+              <small>{state === "recording" || state === "transcribing" || state === "inserting" ? "Live Transcript" : "Transcript"}</small>
               <p className="transcript">{transcript}</p>
               {rawTranscript && rawTranscript !== transcript && (
                 <details>

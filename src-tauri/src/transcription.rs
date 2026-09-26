@@ -12,10 +12,9 @@ pub struct TranscriptionResult {
     pub final_transcript: String,
 }
 
-#[derive(Debug)]
 pub struct WhisperTranscriber {
-    model_path: PathBuf,
     language: String,
+    context: WhisperContext,
 }
 
 impl WhisperTranscriber {
@@ -33,22 +32,22 @@ impl WhisperTranscriber {
             return Err(anyhow!("Whisper language is empty"));
         }
 
-        Ok(Self {
-            model_path,
-            language: config.language.clone(),
-        })
-    }
-
-    pub fn transcribe<P: AsRef<Path>>(&self, wav_path: P) -> Result<TranscriptionResult> {
-        let wav_path = wav_path.as_ref();
-        validate_wav_path(wav_path)?;
-
-        eprintln!("[INFO] Loading Whisper model: {}", self.model_path.display());
+        eprintln!("[INFO] Loading Whisper model: {}", model_path.display());
         let context = WhisperContext::new_with_params(
-            &self.model_path,
+            &model_path,
             WhisperContextParameters::default(),
         )
         .map_err(|e| anyhow!("Unable to load Whisper model: {e}"))?;
+
+        Ok(Self {
+            language: config.language.clone(),
+            context,
+        })
+    }
+
+    pub fn transcribe<P: AsRef<Path>>(&mut self, wav_path: P) -> Result<TranscriptionResult> {
+        let wav_path = wav_path.as_ref();
+        validate_wav_path(wav_path)?;
 
         let mut reader = WavReader::open(wav_path)
             .with_context(|| format!("Unable to open WAV file: {}", wav_path.display()))?;
@@ -80,9 +79,18 @@ impl WhisperTranscriber {
         whisper_rs::convert_integer_to_float_audio(&samples, &mut audio)
             .map_err(|e| anyhow!("Whisper audio conversion failed: {e}"))?;
 
-        eprintln!("[INFO] Starting transcription: {}", wav_path.display());
+        self.transcribe_samples(&audio)
+    }
 
-        let mut state = context
+    pub fn transcribe_samples(&mut self, audio: &[f32]) -> Result<TranscriptionResult> {
+        if audio.is_empty() {
+            return Err(anyhow!("Whisper transcription failed: no audio samples"));
+        }
+
+        eprintln!("[INFO] Starting transcription");
+
+        let mut state = self
+            .context
             .create_state()
             .map_err(|e| anyhow!("Whisper initialization failed: {e}"))?;
 
@@ -95,13 +103,15 @@ impl WhisperTranscriber {
         });
         params.set_translate(false);
         params.set_no_context(true);
+        params.set_suppress_nst(true);
+        params.set_single_segment(true);
         params.set_print_special(false);
         params.set_print_progress(false);
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
 
         state
-            .full(params, &audio)
+            .full(params, audio)
             .map_err(|e| anyhow!("Whisper transcription failed: {e}"))?;
 
         let raw_transcript = state
@@ -109,6 +119,8 @@ impl WhisperTranscriber {
             .map(|segment| segment.to_string())
             .collect::<Vec<_>>()
             .join("")
+            .replace("[BLANK_AUDIO]", "")
+            .replace("[BLANK AUDIO]", "")
             .trim()
             .to_owned();
 
@@ -124,13 +136,12 @@ impl WhisperTranscriber {
             ));
         }
 
-        eprintln!("[INFO] Transcription completed");
-
         Ok(TranscriptionResult {
             raw_transcript,
             final_transcript,
         })
     }
+
 }
 
 pub fn latest_recording_path() -> Result<PathBuf> {
