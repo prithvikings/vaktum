@@ -290,6 +290,8 @@ fn register_hotkey(
                         .map(|value| value.clone())
                         .unwrap_or_else(|_| config::AppConfig::default());
 
+                    let microphone = configured.microphone.clone();
+
                     match audio::start(&recorder, &microphone) {
                         Ok(()) => match streaming::StreamingSession::start(
                             handle.clone(),
