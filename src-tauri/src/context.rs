@@ -32,8 +32,8 @@ pub fn detect(target_window: i64) -> DictationContext {
 
 pub fn classify_process_name(process_name: &str) -> ApplicationKind {
     let executable = process_name
-        .rsplit_once(['\\\\', '/'])
-        .map(|(_, name)| name)
+        .rsplit(|character: char| character == '\\' || character == '/')
+        .next()
         .unwrap_or(process_name)
         .trim();
 
@@ -104,9 +104,12 @@ fn resolve_process_name(target_window: i64) -> Option<String> {
         }
 
         let path = String::from_utf16_lossy(&buffer[..length as usize]);
-        path.rsplit_once(['\\\\', '/'])
-            .map(|(_, name)| name.to_owned())
-            .or_else(|| Some(path))
+        Some(
+            path.rsplit(|character: char| character == '\\' || character == '/')
+                .next()
+                .unwrap_or(&path)
+                .to_owned(),
+        )
     }
 }
 
@@ -123,7 +126,7 @@ mod tests {
     fn classifies_vscode() {
         assert_eq!(classify_process_name("Code.exe"), ApplicationKind::VsCode);
         assert_eq!(
-            classify_process_name("C:\Program Files\Microsoft VS Code\Code.exe"),
+            classify_process_name(r"C:\Program Files\Microsoft VS Code\Code.exe"),
             ApplicationKind::VsCode
         );
         assert_eq!(
@@ -172,9 +175,9 @@ mod tests {
 
     #[test]
     fn classification_does_not_modify_process_name() {
-        let process_name = "C:\Program Files\Google\Chrome\chrome.exe";
+        let process_name = r"C:\Program Files\Google\Chrome\chrome.exe";
         assert_eq!(classify_process_name(process_name), ApplicationKind::Browser);
-        assert_eq!(process_name, "C:\Program Files\Google\Chrome\chrome.exe");
+        assert_eq!(process_name, r"C:\Program Files\Google\Chrome\chrome.exe");
     }
 
     #[test]
