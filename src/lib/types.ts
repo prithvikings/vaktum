@@ -27,6 +27,5 @@ export type TranscriptionResult = {
 };
 
 export type AudioDevice = {
-  id: string;
   name: string;
 };

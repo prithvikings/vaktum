@@ -77,8 +77,10 @@ async fn transcribe_recording(
         .map_err(|_| "Configuration is unavailable".to_owned())?
         .clone();
 
+    let transcription_config = config.clone();
+
     let result = tauri::async_runtime::spawn_blocking(move || {
-        let transcriber = transcription::WhisperTranscriber::from_config(&config)
+        let transcriber = transcription::WhisperTranscriber::from_config(&transcription_config)
             .map_err(|error| error.to_string())?;
 
         transcriber

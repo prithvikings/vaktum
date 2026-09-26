@@ -315,7 +315,7 @@ export default function App() {
             Microphone
             <select value={draftConfig.microphone} onChange={(event) => setDraftConfig({ ...draftConfig, microphone: event.target.value })}>
               <option value="default">System default microphone</option>
-              {devices.map((device) => <option value={device.id} key={device.id}>{device.name}</option>)}
+              {devices.map((device) => <option value={device.name} key={device.name}>{device.name}</option>)}
             </select>
           </label>
 

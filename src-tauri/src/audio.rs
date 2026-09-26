@@ -1,13 +1,12 @@
 use anyhow::{anyhow, Context, Result};
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
-    Data, Device, DeviceId, SampleFormat,
+    Data, Device, SampleFormat,
 };
 use hound::{SampleFormat as WavSampleFormat, WavSpec, WavWriter};
 use std::{
     fs,
     path::PathBuf,
-    str::FromStr,
     sync::{Arc, Mutex},
     thread,
     time::Duration,
@@ -15,7 +14,6 @@ use std::{
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct AudioDevice {
-    pub id: String,
     pub name: String,
 }
 
@@ -26,18 +24,14 @@ pub struct Recorder {
     pub recording: bool,
 }
 
-pub fn input_devices() -> Result<Vec<(String, String)>> {
+pub fn input_devices() -> Result<Vec<String>> {
     let host = cpal::default_host();
 
     host.input_devices()?
         .map(|device| {
-            let id = device.id()?.to_string();
-            let name = device
-                .description()
-                .map(|description| description.name().to_owned())
-                .unwrap_or_else(|_| device.to_string());
-
-            Ok((id, name))
+            device
+                .name()
+                .map_err(|error| anyhow!("Unable to read microphone name: {error}"))
         })
         .collect()
 }
@@ -133,6 +127,10 @@ pub fn start(rec: &Arc<Mutex<Recorder>>, microphone: &str) -> Result<()> {
     Ok(())
 }
 
+/// CPAL 0.16 exposes a human-readable device name but no stable device-ID
+/// API or host lookup-by-ID. Vaktum therefore persists the selected name.
+/// Names can change or collide, so an unavailable/ambiguous selection safely
+/// falls back to the system default input device rather than inventing an ID.
 fn select_input_device(host: &cpal::Host, microphone: &str) -> Result<Device> {
     if microphone == "default" || microphone.trim().is_empty() {
         return host
@@ -140,10 +138,24 @@ fn select_input_device(host: &cpal::Host, microphone: &str) -> Result<Device> {
             .ok_or_else(|| anyhow!("Microphone unavailable"));
     }
 
-    if let Ok(id) = DeviceId::from_str(microphone) {
-        if let Some(device) = host.device_by_id(&id) {
+    let mut matching_devices = host
+        .input_devices()?
+        .filter_map(|device| match device.name() {
+            Ok(name) if name == microphone => Some(Ok(device)),
+            Ok(_) => None,
+            Err(error) => Some(Err(anyhow!("Unable to read microphone name: {error}"))),
+        });
+
+    let first = matching_devices.next().transpose()?;
+    if let Some(device) = first {
+        let second = matching_devices.next().transpose()?;
+        if second.is_none() {
             return Ok(device);
         }
+
+        eprintln!(
+            "[WARN] Multiple input devices share the configured name; falling back to the default microphone"
+        );
     }
 
     host.default_input_device()
@@ -250,10 +262,10 @@ mod tests {
     }
 
     #[test]
-    fn invalid_device_id_falls_back_or_reports_missing_microphone() {
+    fn missing_microphone_name_falls_back_or_reports_missing_microphone() {
         let result = select_input_device(
             &cpal::default_host(),
-            "wasapi:device-that-does-not-exist",
+            "Vaktum microphone that does not exist",
         );
 
         assert!(result.is_ok() || result.is_err());
