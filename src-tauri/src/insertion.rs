@@ -78,16 +78,18 @@ fn insert_text_windows(target_window: i64, text: &str) -> Result<(), String> {
             ShowWindow(hwnd, SW_RESTORE);
         }
 
-        if SetForegroundWindow(hwnd) == 0 {
-            restore_clipboard(previous_clipboard.as_deref(), clipboard_sequence);
-            return Err("Could not activate the previously focused application".to_owned());
-        }
-
-        thread::sleep(Duration::from_millis(50));
-
         if GetForegroundWindow() != hwnd {
-            restore_clipboard(previous_clipboard.as_deref(), clipboard_sequence);
-            return Err("Could not activate the previously focused application".to_owned());
+            if SetForegroundWindow(hwnd) == 0 {
+                restore_clipboard(previous_clipboard.as_deref(), clipboard_sequence);
+                return Err("Could not activate the previously focused application".to_owned());
+            }
+
+            thread::sleep(Duration::from_millis(50));
+
+            if GetForegroundWindow() != hwnd {
+                restore_clipboard(previous_clipboard.as_deref(), clipboard_sequence);
+                return Err("Could not activate the previously focused application".to_owned());
+            }
         }
 
         if let Err(error) = send_paste() {
