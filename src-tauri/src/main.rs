@@ -237,7 +237,7 @@ fn input_devices() -> Result<Vec<audio::AudioDevice>, String> {
         .map(|devices| {
             devices
                 .into_iter()
-                .map(|(id, name)| audio::AudioDevice { id, name })
+                .map(|name| audio::AudioDevice { name })
                 .collect()
         })
 }
