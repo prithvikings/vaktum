@@ -281,6 +281,15 @@ fn register_hotkey(
                         return;
                     }
 
+                    if streaming_session
+                        .lock()
+                        .ok()
+                        .map(|active| active.is_some())
+                        .unwrap_or(false)
+                    {
+                        return;
+                    }
+
                     let target_window_id = match insertion::capture_target_window() {
                         Ok(window) => {
                             if let Ok(mut target) = target_window.lock() {
