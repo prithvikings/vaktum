@@ -27,6 +27,7 @@ pub struct AppState {
     target_window: Arc<Mutex<Option<i64>>>,
     config: Arc<Mutex<config::AppConfig>>,
     streaming_session: Arc<Mutex<Option<streaming::StreamingSession>>>,
+    streaming_stopping: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[derive(serde::Serialize)]
@@ -196,6 +197,7 @@ fn save_config(
             target,
             state.config.clone(),
             state.streaming_session.clone(),
+            state.streaming_stopping.clone(),
         ) {
             let _ = register_hotkey(
                 &app,
@@ -206,6 +208,7 @@ fn save_config(
                 state.target_window.clone(),
                 state.config.clone(),
                 state.streaming_session.clone(),
+                state.streaming_stopping.clone(),
             );
 
             return Err(format!("Unable to update global hotkey: {error}"));
@@ -224,6 +227,7 @@ fn save_config(
                 state.target_window.clone(),
                 state.config.clone(),
                 state.streaming_session.clone(),
+                state.streaming_stopping.clone(),
             );
         }
 
@@ -261,6 +265,7 @@ fn register_hotkey(
     target_window: Arc<Mutex<Option<i64>>>,
     config: Arc<Mutex<config::AppConfig>>,
     streaming_session: Arc<Mutex<Option<streaming::StreamingSession>>>,
+    streaming_stopping: Arc<std::sync::atomic::AtomicBool>,
 ) -> Result<(), String> {
     let handle = app.clone();
 
@@ -268,6 +273,14 @@ fn register_hotkey(
         .on_shortcut(shortcut, move |_app, _shortcut, event: ShortcutEvent| {
             match event.state() {
                 ShortcutState::Pressed => {
+                    if streaming_stopping.load(std::sync::atomic::Ordering::Acquire) {
+                        let _ = handle.emit(
+                            "vaktum://recording-error",
+                            "Previous dictation is still finishing. Please try again.",
+                        );
+                        return;
+                    }
+
                     let target_window_id = match insertion::capture_target_window() {
                         Ok(window) => {
                             if let Ok(mut target) = target_window.lock() {
@@ -332,7 +345,12 @@ fn register_hotkey(
 
                     if let Some(session) = session {
                         eprintln!("[INFO] Streaming dictation stopping");
-                        thread::spawn(move || session.stop());
+                        streaming_stopping.store(true, std::sync::atomic::Ordering::Release);
+                        let stopping = Arc::clone(&streaming_stopping);
+                        thread::spawn(move || {
+                            session.stop();
+                            stopping.store(false, std::sync::atomic::Ordering::Release);
+                        });
                     } else {
                         match audio::stop(&recorder) {
                             Ok(path) => {
@@ -370,6 +388,7 @@ fn main() {
     let target_window = Arc::new(Mutex::new(None));
     let config = Arc::new(Mutex::new(config::load()));
     let streaming_session = Arc::new(Mutex::new(None));
+    let streaming_stopping = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
     tauri::Builder::default()
         .manage(AppState {
@@ -377,6 +396,7 @@ fn main() {
             target_window: target_window.clone(),
             config: config.clone(),
             streaming_session: streaming_session.clone(),
+            streaming_stopping: streaming_stopping.clone(),
         })
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(move |app| {
@@ -399,6 +419,7 @@ fn main() {
                 target_window.clone(),
                 config.clone(),
                 streaming_session.clone(),
+                streaming_stopping.clone(),
             )?;
 
             let show = MenuItem::with_id(
