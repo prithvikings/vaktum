@@ -105,14 +105,14 @@ fn run(
 
                         let stable = stable_prefix(&previous_hypothesis, &hypothesis);
 
-                        if !stable.is_empty() && stable.starts_with(&committed) {
+                        if !stable.is_empty() {
                             let delta = delta_after_committed(&committed, &stable);
                             if !delta.is_empty() {
                                 let insert_delta = join_delta(&committed, &delta);
                                 let _ = app.emit("vaktum://streaming-inserting", ());
                                 match insertion::insert_text(target_window, &insert_delta) {
                                     Ok(()) => {
-                                        committed = stable;
+                                        committed = join_delta(&committed, &delta);
                                     }
                                     Err(error) => {
                                         eprintln!("[ERROR] streaming insertion: {error}");
@@ -299,17 +299,21 @@ pub fn reconcile_final(committed: &str, final_transcript: &str) -> String {
         return String::new();
     }
 
-    let common_words = committed
-        .split_whitespace()
-        .zip(final_transcript.split_whitespace())
-        .take_while(|(left, right)| left == right)
-        .count();
+    let committed_words = committed.split_whitespace().collect::<Vec<_>>();
+    let final_words = final_transcript.split_whitespace().collect::<Vec<_>>();
 
-    final_transcript
-        .split_whitespace()
-        .skip(common_words)
-        .collect::<Vec<_>>()
-        .join(" ")
+    for overlap in (1..=committed_words.len().min(final_words.len())).rev() {
+        let committed_start = committed_words.len() - overlap;
+        if committed_words[committed_start..]
+            .iter()
+            .zip(final_words.iter())
+            .all(|(left, right)| comparable_word(left) == comparable_word(right))
+        {
+            return final_words[overlap..].join(" ");
+        }
+    }
+
+    final_transcript.trim().to_owned()
 }
 
 fn join_delta(committed: &str, delta: &str) -> String {
