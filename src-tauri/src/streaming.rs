@@ -44,6 +44,7 @@ impl StreamingSession {
         let handle = thread::Builder::new()
             .name("vaktum-streaming-worker".to_owned())
             .spawn(move || {
+                let emergency_recorder = Arc::clone(&recorder);
                 if let Err(error) = run(
                     app.clone(),
                     recorder,
@@ -51,6 +52,7 @@ impl StreamingSession {
                     config,
                     worker_stop,
                 ) {
+                    let _ = audio::stop(&emergency_recorder);
                     eprintln!("[ERROR] streaming dictation: {error}");
                     let _ = app.emit(
                         "vaktum://streaming-fatal-error",
