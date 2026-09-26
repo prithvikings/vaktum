@@ -23,6 +23,15 @@ pub fn detect(target_window: i64) -> DictationContext {
     let process_name = resolve_process_name(target_window).unwrap_or_default();
     let application = classify_process_name(&process_name);
 
+    eprintln!(
+        "[INFO] Dictation context: application={application:?}, process={}",
+        if process_name.is_empty() {
+            "unknown process"
+        } else {
+            &process_name
+        }
+    );
+
     DictationContext {
         application,
         process_name,
