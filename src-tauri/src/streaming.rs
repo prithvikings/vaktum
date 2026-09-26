@@ -29,6 +29,10 @@ struct StreamingCompleted {
 pub struct StreamingSession {
     stop: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,
+    // P2-M1 establishes the immutable context boundary for a dictation session.
+    // Later context-aware milestones consume this snapshot; M6 itself must not
+    // recompute application context while streaming.
+    #[allow(dead_code)]
     context: DictationContext,
 }
 
@@ -71,6 +75,10 @@ impl StreamingSession {
         })
     }
 
+    // Kept as the session's read-only context API for the next context-aware
+    // milestone. It is intentionally unused by M6 so context detection cannot
+    // influence transcription or insertion behavior.
+    #[allow(dead_code)]
     pub fn context(&self) -> &DictationContext {
         &self.context
     }
