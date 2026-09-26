@@ -39,10 +39,6 @@ impl WhisperTranscriber {
         })
     }
 
-    pub fn from_environment() -> Result<Self> {
-        Self::from_config(&AppConfig::default())
-    }
-
     pub fn transcribe<P: AsRef<Path>>(&self, wav_path: P) -> Result<TranscriptionResult> {
         let wav_path = wav_path.as_ref();
         validate_wav_path(wav_path)?;
