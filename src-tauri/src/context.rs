@@ -1,8 +1,5 @@
 use serde::Serialize;
-use std::{
-    path::Path,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -22,16 +19,6 @@ pub struct DictationContext {
     pub captured_at: u64,
 }
 
-impl DictationContext {
-    fn unknown(process_name: String) -> Self {
-        Self {
-            application: ApplicationKind::Unknown,
-            process_name,
-            captured_at: now_unix_timestamp(),
-        }
-    }
-}
-
 pub fn detect(target_window: i64) -> DictationContext {
     let process_name = resolve_process_name(target_window).unwrap_or_default();
     let application = classify_process_name(&process_name);
@@ -44,9 +31,9 @@ pub fn detect(target_window: i64) -> DictationContext {
 }
 
 pub fn classify_process_name(process_name: &str) -> ApplicationKind {
-    let executable = Path::new(process_name)
-        .file_name()
-        .and_then(|name| name.to_str())
+    let executable = process_name
+        .rsplit_once(['\\\\', '/'])
+        .map(|(_, name)| name)
         .unwrap_or(process_name)
         .trim();
 
@@ -117,10 +104,9 @@ fn resolve_process_name(target_window: i64) -> Option<String> {
         }
 
         let path = String::from_utf16_lossy(&buffer[..length as usize]);
-        Path::new(&path)
-            .file_name()
-            .and_then(|name| name.to_str())
-            .map(ToOwned::to_owned)
+        path.rsplit_once(['\\\\', '/'])
+            .map(|(_, name)| name.to_owned())
+            .or_else(|| Some(path))
     }
 }
 
