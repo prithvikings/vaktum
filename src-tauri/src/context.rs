@@ -64,10 +64,10 @@ fn resolve_process_name(target_window: i64) -> Option<String> {
     use windows_sys::Win32::{
         Foundation::{CloseHandle, HWND},
         System::Threading::{
-            GetCurrentProcessId, GetWindowThreadProcessId, OpenProcess,
-            QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
+            GetCurrentProcessId, OpenProcess, QueryFullProcessImageNameW,
+            PROCESS_QUERY_LIMITED_INFORMATION,
         },
-        UI::WindowsAndMessaging::IsWindow,
+        UI::WindowsAndMessaging::{GetWindowThreadProcessId, IsWindow},
     };
 
     let hwnd = target_window as HWND;
