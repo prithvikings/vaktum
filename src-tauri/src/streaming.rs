@@ -146,7 +146,21 @@ fn run(
 
     let path = audio::stop(&recorder)?;
     let _ = app.emit("vaktum://streaming-transcribing", ());
-    let final_result = transcriber.transcribe(&path)?;
+    let final_result = match transcriber.transcribe(&path) {
+        Ok(result) => result,
+        Err(error) if is_empty_transcription_error(&error) => {
+            let _ = app.emit(
+                "vaktum://streaming-completed",
+                StreamingCompleted {
+                    raw_transcript: committed.clone(),
+                    final_transcript: committed.clone(),
+                    history_error: None,
+                },
+            );
+            return Ok(());
+        }
+        Err(error) => return Err(error),
+    };
 
     let remaining = reconcile_final(&committed, &final_result.final_transcript);
     if !remaining.is_empty() {
@@ -156,7 +170,7 @@ fn run(
             .map_err(|error| anyhow!("Final insertion failed: {error}"))?;
     }
 
-    let history_error = if config.history_enabled {
+    let history_error = if config.history_enabled && !final_result.final_transcript.trim().is_empty() {
         let entry = history::HistoryEntry {
             timestamp: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -187,6 +201,12 @@ fn run(
     );
 
     Ok(())
+}
+
+fn is_empty_transcription_error(error: &anyhow::Error) -> bool {
+    let message = error.to_string();
+    message.contains("no transcript was produced")
+        || message.contains("cleanup produced an empty transcript")
 }
 
 fn resample_linear(input: &[f32], input_rate: u32, output_rate: u32) -> Vec<f32> {
