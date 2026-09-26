@@ -90,7 +90,10 @@ fn insert_text_windows(target_window: i64, text: &str) -> Result<(), String> {
             return Err("Could not activate the previously focused application".to_owned());
         }
 
-        send_paste()?;
+        if let Err(error) = send_paste() {
+            restore_clipboard(previous_clipboard.as_deref(), clipboard_sequence);
+            return Err(error);
+        }
 
         // Give the target application a short opportunity to consume Ctrl+V before
         // restoring text-only clipboard contents. If the user changed the clipboard
