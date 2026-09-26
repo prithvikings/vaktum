@@ -185,6 +185,17 @@ fn push_samples<T: cpal::SizedSample + Copy + Into<f32>>(
     }
 }
 
+
+pub fn snapshot_recent(
+    rec: &Arc<Mutex<Recorder>>,
+    max_duration_ms: u64,
+) -> Result<(Vec<f32>, u32)> {
+    let r = rec.lock().map_err(|_| anyhow!("Recorder lock poisoned"))?;
+    let max_samples = ((r.sample_rate as u64 * max_duration_ms) / 1000) as usize;
+    let start = r.samples.len().saturating_sub(max_samples);
+    Ok((r.samples[start..].to_vec(), r.sample_rate))
+}
+
 pub fn stop(rec: &Arc<Mutex<Recorder>>) -> Result<PathBuf> {
     {
         let mut r = rec.lock().map_err(|_| anyhow!("Recorder lock poisoned"))?;
