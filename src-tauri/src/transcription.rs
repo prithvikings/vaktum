@@ -12,10 +12,10 @@ pub struct TranscriptionResult {
     pub final_transcript: String,
 }
 
-#[derive(Debug)]
 pub struct WhisperTranscriber {
     model_path: PathBuf,
     language: String,
+    context: WhisperContext,
 }
 
 impl WhisperTranscriber {
@@ -33,22 +33,23 @@ impl WhisperTranscriber {
             return Err(anyhow!("Whisper language is empty"));
         }
 
-        Ok(Self {
-            model_path,
-            language: config.language.clone(),
-        })
-    }
-
-    pub fn transcribe<P: AsRef<Path>>(&self, wav_path: P) -> Result<TranscriptionResult> {
-        let wav_path = wav_path.as_ref();
-        validate_wav_path(wav_path)?;
-
-        eprintln!("[INFO] Loading Whisper model: {}", self.model_path.display());
+        eprintln!("[INFO] Loading Whisper model: {}", model_path.display());
         let context = WhisperContext::new_with_params(
-            &self.model_path,
+            &model_path,
             WhisperContextParameters::default(),
         )
         .map_err(|e| anyhow!("Unable to load Whisper model: {e}"))?;
+
+        Ok(Self {
+            model_path,
+            language: config.language.clone(),
+            context,
+        })
+    }
+
+    pub fn transcribe<P: AsRef<Path>>(&mut self, wav_path: P) -> Result<TranscriptionResult> {
+        let wav_path = wav_path.as_ref();
+        validate_wav_path(wav_path)?;
 
         let mut reader = WavReader::open(wav_path)
             .with_context(|| format!("Unable to open WAV file: {}", wav_path.display()))?;
@@ -82,7 +83,8 @@ impl WhisperTranscriber {
 
         eprintln!("[INFO] Starting transcription: {}", wav_path.display());
 
-        let mut state = context
+        let mut state = self
+            .context
             .create_state()
             .map_err(|e| anyhow!("Whisper initialization failed: {e}"))?;
 
