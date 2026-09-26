@@ -71,6 +71,10 @@ impl StreamingSession {
         })
     }
 
+    pub fn context(&self) -> &DictationContext {
+        &self.context
+    }
+
     pub fn stop(mut self) {
         self.stop.store(true, Ordering::Release);
         if let Some(handle) = self.handle.take() {
