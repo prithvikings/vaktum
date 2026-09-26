@@ -14,12 +14,12 @@ const ROLLING_WINDOW_MS: u64 = 5_000;
 const POLL_INTERVAL_MS: u64 = 700;
 const MIN_AUDIO_MS: u64 = 900;
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize)]
 struct StreamingUpdate {
     transcript: String,
 }
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize)]
 struct StreamingCompleted {
     raw_transcript: String,
     final_transcript: String,
