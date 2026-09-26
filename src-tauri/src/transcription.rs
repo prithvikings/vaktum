@@ -103,6 +103,7 @@ impl WhisperTranscriber {
         });
         params.set_translate(false);
         params.set_no_context(true);
+        params.set_suppress_nst(true);
         params.set_single_segment(true);
         params.set_print_special(false);
         params.set_print_progress(false);
@@ -118,6 +119,8 @@ impl WhisperTranscriber {
             .map(|segment| segment.to_string())
             .collect::<Vec<_>>()
             .join("")
+            .replace("[BLANK_AUDIO]", "")
+            .replace("[BLANK AUDIO]", "")
             .trim()
             .to_owned();
 
