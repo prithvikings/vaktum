@@ -97,6 +97,12 @@ fn run(
                 match transcriber.transcribe_samples(&audio) {
                     Ok(result) => {
                         let hypothesis = result.raw_transcript.trim().to_owned();
+                        if hypothesis.is_empty() {
+                            previous_hypothesis.clear();
+                            thread::sleep(Duration::from_millis(POLL_INTERVAL_MS));
+                            continue;
+                        }
+
                         let stable = stable_prefix(&previous_hypothesis, &hypothesis);
 
                         if !stable.is_empty() && stable.starts_with(&committed) {
@@ -129,11 +135,7 @@ fn run(
                         let _ = app.emit("vaktum://streaming-resume", ());
                     }
                     Err(error) => {
-                        eprintln!("[ERROR] streaming transcription: {error}");
-                        let _ = app.emit(
-                            "vaktum://streaming-error",
-                            "Streaming transcription failed. Continuing dictation.",
-                        );
+                        eprintln!("[WARN] streaming transcription pass skipped: {error}");
                     }
                 }
             }
@@ -218,28 +220,70 @@ pub fn stable_prefix(previous: &str, current: &str) -> String {
         .map(|(character, _)| character.len_utf8())
         .sum::<usize>();
 
-    if common_len == 0 {
-        return String::new();
+    if common_len > 0 {
+        let common = &current[..common_len];
+
+        if common.ends_with(char::is_whitespace) {
+            return common.trim_end().to_owned();
+        }
+
+        return common
+            .rsplit_once(char::is_whitespace)
+            .map(|(prefix, _)| prefix.trim_end().to_owned())
+            .unwrap_or_default();
     }
 
-    let common = &current[..common_len];
+    // Rolling windows eventually stop sharing the same beginning. In that case,
+    // use the longest suffix/prefix word overlap as the stable region.
+    let previous_words = previous.split_whitespace().collect::<Vec<_>>();
+    let current_words = current.split_whitespace().collect::<Vec<_>>();
 
-    if common.ends_with(char::is_whitespace) {
-        return common.trim_end().to_owned();
+    for overlap in (2..=previous_words.len().min(current_words.len())).rev() {
+        let previous_start = previous_words.len() - overlap;
+        if previous_words[previous_start..]
+            .iter()
+            .zip(current_words.iter())
+            .all(|(left, right)| comparable_word(left) == comparable_word(right))
+        {
+            return current_words[..overlap].join(" ");
+        }
     }
 
-    common
-        .rsplit_once(char::is_whitespace)
-        .map(|(prefix, _)| prefix.trim_end().to_owned())
-        .unwrap_or_default()
+    String::new()
 }
 
 pub fn delta_after_committed(committed: &str, stable: &str) -> String {
-    stable
+    if stable
         .strip_prefix(committed)
-        .unwrap_or_default()
-        .trim_start()
-        .to_owned()
+        .is_some()
+    {
+        return stable
+            .strip_prefix(committed)
+            .unwrap_or_default()
+            .trim_start()
+            .to_owned();
+    }
+
+    let committed_words = committed.split_whitespace().collect::<Vec<_>>();
+    let stable_words = stable.split_whitespace().collect::<Vec<_>>();
+
+    for overlap in (2..=committed_words.len().min(stable_words.len())).rev() {
+        let committed_start = committed_words.len() - overlap;
+        if committed_words[committed_start..]
+            .iter()
+            .zip(stable_words.iter())
+            .all(|(left, right)| comparable_word(left) == comparable_word(right))
+        {
+            return stable_words[overlap..].join(" ");
+        }
+    }
+
+    String::new()
+}
+
+fn comparable_word(word: &str) -> String {
+    word.trim_matches(|character: char| ".,!?;:()[]{}\"'".contains(character))
+        .to_ascii_lowercase()
 }
 
 pub fn reconcile_final(committed: &str, final_transcript: &str) -> String {
@@ -334,6 +378,30 @@ mod tests {
             "hello"
         );
         assert_eq!(delta_after_committed("hello", "hello"), "");
+    }
+
+    #[test]
+    fn shifted_rolling_windows_produce_stable_overlap() {
+        assert_eq!(
+            stable_prefix("hello how are you", "how are you doing"),
+            "how are you"
+        );
+        assert_eq!(
+            delta_after_committed("hello how are", "how are you"),
+            "you"
+        );
+    }
+
+    #[test]
+    fn punctuation_changes_do_not_break_rolling_overlap() {
+        assert_eq!(
+            stable_prefix("hello world", "world, today"),
+            "world,"
+        );
+        assert_eq!(
+            delta_after_committed("hello world", "world, today"),
+            "today"
+        );
     }
 
     #[test]
