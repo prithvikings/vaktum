@@ -5,7 +5,7 @@ const transitions: Record<VaktumState, readonly VaktumState[]> = {
   recording: ["processing", "transcribing", "error"],
   processing: ["transcribing", "error"],
   transcribing: ["recording", "idle", "inserting", "error"],
-  inserting: ["recording", "idle", "error"],
+  inserting: ["transcribing", "idle", "error"],
   error: ["idle"],
 };
 
