@@ -5,51 +5,14 @@ pub fn clean_transcript(input: &str) -> String {
         return String::new();
     }
 
-    let mut tokens = normalized.split_whitespace();
-    let mut output = Vec::with_capacity(normalized.len());
+    let tokens = normalized
+        .split_whitespace()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
 
-    while let Some(token) = tokens.next() {
-        let mut cleaned = token.to_owned();
-
-        while let Some(next) = tokens.next() {
-            if is_punctuation_token(next) {
-                cleaned.push_str(next);
-                continue;
-            }
-
-            if should_remove_repeated_word(&cleaned, next) {
-                continue;
-            }
-
-            output.push(cleaned);
-            cleaned = next.to_owned();
-            break;
-        }
-
-        output.push(cleaned);
-    }
-
-    normalize_punctuation_spacing(&output)
+    normalize_punctuation_spacing(&tokens)
 }
 
-fn should_remove_repeated_word(previous: &str, current: &str) -> bool {
-    let previous_word = normalize_word(previous);
-    let current_word = normalize_word(current);
-
-    !previous_word.is_empty()
-        && previous_word == current_word
-        && !intentional_repetition(&current_word)
-}
-
-fn intentional_repetition(word: &str) -> bool {
-    matches!(word, "very" | "bye")
-}
-
-fn normalize_word(token: &str) -> String {
-    token
-        .trim_matches(|character: char| character.is_ascii_punctuation())
-        .to_ascii_lowercase()
-}
 
 fn is_punctuation_token(token: &str) -> bool {
     !token.is_empty() && token.chars().all(|character| character.is_ascii_punctuation())
@@ -98,8 +61,11 @@ mod tests {
     }
 
     #[test]
-    fn removes_obvious_repeated_word() {
-        assert_eq!(clean_transcript("hello hello world"), "hello world");
+    fn preserves_repeated_words() {
+        assert_eq!(
+            clean_transcript("hello hello world"),
+            "hello hello world"
+        );
     }
 
     #[test]
@@ -109,6 +75,10 @@ mod tests {
             "very very important"
         );
         assert_eq!(clean_transcript("bye bye"), "bye bye");
+        assert_eq!(
+            clean_transcript("no no don't do that"),
+            "no no don't do that"
+        );
     }
 
     #[test]
