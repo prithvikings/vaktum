@@ -2,10 +2,10 @@ import type { VaktumState } from "./types";
 
 const transitions: Record<VaktumState, readonly VaktumState[]> = {
   idle: ["recording", "transcribing", "inserting"],
-  recording: ["processing", "error"],
+  recording: ["processing", "transcribing", "error"],
   processing: ["transcribing", "error"],
-  transcribing: ["idle", "inserting", "error"],
-  inserting: ["idle", "error"],
+  transcribing: ["recording", "idle", "inserting", "error"],
+  inserting: ["recording", "idle", "error"],
   error: ["idle"],
 };
 
