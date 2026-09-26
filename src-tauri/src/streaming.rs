@@ -399,12 +399,12 @@ mod tests {
     #[test]
     fn punctuation_changes_do_not_break_rolling_overlap() {
         assert_eq!(
-            stable_prefix("hello world", "world, today"),
-            "world,"
+            stable_prefix("hello there world", "there world, today"),
+            "there world,"
         );
         assert_eq!(
-            delta_after_committed("hello world", "world, today"),
-            "today"
+            delta_after_committed("hello there", "there world, today"),
+            "world, today"
         );
     }
 
