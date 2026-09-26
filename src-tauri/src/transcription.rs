@@ -1,34 +1,46 @@
-use crate::cleanup;
+use crate::{cleanup, config::AppConfig};
 use anyhow::{anyhow, Context, Result};
 use hound::WavReader;
+use serde::Serialize;
 use std::path::{Path, PathBuf};
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
 const MODEL_ENV: &str = "VAKTUM_WHISPER_MODEL";
-const DEFAULT_MODEL_FILE: &str = "ggml-base.en.bin";
+#[derive(Debug, Serialize)]
+pub struct TranscriptionResult {
+    pub raw_transcript: String,
+    pub final_transcript: String,
+}
 
 #[derive(Debug)]
 pub struct WhisperTranscriber {
     model_path: PathBuf,
+    language: String,
 }
 
 impl WhisperTranscriber {
-    pub fn from_environment() -> Result<Self> {
-        let model_path = configured_model_path()?;
+    pub fn from_config(config: &AppConfig) -> Result<Self> {
+        let model_path = configured_model_path(config);
 
         if !model_path.is_file() {
             return Err(anyhow!(
-                "Whisper model not found: {}. Set {MODEL_ENV} to the model path or place {DEFAULT_MODEL_FILE} under %LOCALAPPDATA%\\Vaktum\\models",
+                "Whisper model not found: {}",
                 model_path.display()
             ));
         }
 
-        Ok(Self { model_path })
+        if config.language.trim().is_empty() {
+            return Err(anyhow!("Whisper language is empty"));
+        }
+
+        Ok(Self {
+            model_path,
+            language: config.language.clone(),
+        })
     }
 
-    pub fn transcribe<P: AsRef<Path>>(&self, wav_path: P) -> Result<String> {
+    pub fn transcribe<P: AsRef<Path>>(&self, wav_path: P) -> Result<TranscriptionResult> {
         let wav_path = wav_path.as_ref();
-
         validate_wav_path(wav_path)?;
 
         eprintln!("[INFO] Loading Whisper model: {}", self.model_path.display());
@@ -75,7 +87,12 @@ impl WhisperTranscriber {
             .map_err(|e| anyhow!("Whisper initialization failed: {e}"))?;
 
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-        params.set_language(Some("en"));
+        let language = self.language.trim();
+        params.set_language(if language.eq_ignore_ascii_case("auto") {
+            None
+        } else {
+            Some(language)
+        });
         params.set_translate(false);
         params.set_no_context(true);
         params.set_print_special(false);
@@ -99,14 +116,20 @@ impl WhisperTranscriber {
             return Err(anyhow!("Whisper transcription failed: no transcript was produced"));
         }
 
-        let transcript = cleanup::clean_transcript(&raw_transcript);
+        let final_transcript = cleanup::clean_transcript(&raw_transcript);
 
-        if transcript.is_empty() {
-            return Err(anyhow!("Whisper transcription failed: cleanup produced an empty transcript"));
+        if final_transcript.is_empty() {
+            return Err(anyhow!(
+                "Whisper transcription failed: cleanup produced an empty transcript"
+            ));
         }
 
         eprintln!("[INFO] Transcription completed");
-        Ok(transcript)
+
+        Ok(TranscriptionResult {
+            raw_transcript,
+            final_transcript,
+        })
     }
 }
 
@@ -120,21 +143,14 @@ pub fn latest_recording_path() -> Result<PathBuf> {
         .join("latest.wav"))
 }
 
-pub fn configured_model_path() -> Result<PathBuf> {
+pub fn configured_model_path(config: &AppConfig) -> PathBuf {
     if let Some(path) = std::env::var_os(MODEL_ENV) {
-        if path.is_empty() {
-            return Err(anyhow!("{MODEL_ENV} is set but empty"));
+        if !path.is_empty() {
+            return PathBuf::from(path);
         }
-        return Ok(PathBuf::from(path));
     }
 
-    let local_app_data = std::env::var_os("LOCALAPPDATA")
-        .ok_or_else(|| anyhow!("LOCALAPPDATA is unavailable; set {MODEL_ENV} to the Whisper model path"))?;
-
-    Ok(PathBuf::from(local_app_data)
-        .join("Vaktum")
-        .join("models")
-        .join(DEFAULT_MODEL_FILE))
+    PathBuf::from(&config.model)
 }
 
 fn validate_wav_path(path: &Path) -> Result<()> {
@@ -163,19 +179,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn missing_model_path_is_reported() {
-        let path = std::env::temp_dir().join("vaktum-missing-whisper-model.bin");
-        let _ = std::fs::remove_file(&path);
-
-        std::env::set_var(MODEL_ENV, &path);
-        let result = WhisperTranscriber::from_environment();
-        std::env::remove_var(MODEL_ENV);
-
-        let error = result.expect_err("missing model should fail");
-        assert!(error.to_string().contains("Whisper model not found"));
-    }
-
-    #[test]
     fn missing_wav_path_is_reported() {
         let path = std::env::temp_dir().join("vaktum-missing-recording.wav");
         let _ = std::fs::remove_file(&path);
@@ -193,5 +196,19 @@ mod tests {
         let _ = std::fs::remove_file(&path);
 
         assert!(error.to_string().contains("expected a .wav file"));
+    }
+
+    #[test]
+    fn configured_model_path_prefers_environment_override() {
+        let config = AppConfig {
+            model: "configured-model.bin".to_owned(),
+            ..AppConfig::default()
+        };
+
+        std::env::set_var(MODEL_ENV, "override-model.bin");
+        let path = configured_model_path(&config);
+        std::env::remove_var(MODEL_ENV);
+
+        assert_eq!(path, PathBuf::from("override-model.bin"));
     }
 }
