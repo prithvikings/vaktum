@@ -236,22 +236,38 @@ pub fn stable_prefix(previous: &str, current: &str) -> String {
     if common_len > 0 {
         let common = &current[..common_len];
 
+        // If the previous hypothesis ended at a word boundary and the new
+        // hypothesis continues it with whitespace or punctuation, the whole
+        // previous hypothesis is stable. If it is still extending the same
+        // word, only the earlier complete words are stable.
+        if common_len == previous.len() {
+            if current.len() == common_len
+                || current[common_len..]
+                    .chars()
+                    .next()
+                    .is_some_and(|character| character.is_whitespace() || ".,!?;:)]}".contains(character))
+            {
+                return previous.trim_end().to_owned();
+            }
+        }
+
         if common.ends_with(char::is_whitespace) {
             return common.trim_end().to_owned();
         }
 
-        return common
-            .rsplit_once(char::is_whitespace)
-            .map(|(prefix, _)| prefix.trim_end().to_owned())
-            .unwrap_or_default();
+        if let Some((prefix, _)) = common.rsplit_once(char::is_whitespace) {
+            if !prefix.trim().is_empty() {
+                return prefix.trim_end().to_owned();
+            }
+        }
     }
 
-    // Rolling windows eventually stop sharing the same beginning. In that case,
-    // use the longest suffix/prefix word overlap as the stable region.
+    // Rolling windows eventually stop sharing the same beginning. In that
+    // case, use the longest suffix/prefix word overlap.
     let previous_words = previous.split_whitespace().collect::<Vec<_>>();
     let current_words = current.split_whitespace().collect::<Vec<_>>();
 
-    for overlap in (2..=previous_words.len().min(current_words.len())).rev() {
+    for overlap in (1..=previous_words.len().min(current_words.len())).rev() {
         let previous_start = previous_words.len() - overlap;
         if previous_words[previous_start..]
             .iter()
@@ -265,22 +281,16 @@ pub fn stable_prefix(previous: &str, current: &str) -> String {
     String::new()
 }
 
+
 pub fn delta_after_committed(committed: &str, stable: &str) -> String {
-    if stable
-        .strip_prefix(committed)
-        .is_some()
-    {
-        return stable
-            .strip_prefix(committed)
-            .unwrap_or_default()
-            .trim_start()
-            .to_owned();
+    if let Some(delta) = stable.strip_prefix(committed) {
+        return delta.trim_start().to_owned();
     }
 
     let committed_words = committed.split_whitespace().collect::<Vec<_>>();
     let stable_words = stable.split_whitespace().collect::<Vec<_>>();
 
-    for overlap in (2..=committed_words.len().min(stable_words.len())).rev() {
+    for overlap in (1..=committed_words.len().min(stable_words.len())).rev() {
         let committed_start = committed_words.len() - overlap;
         if committed_words[committed_start..]
             .iter()
@@ -293,6 +303,7 @@ pub fn delta_after_committed(committed: &str, stable: &str) -> String {
 
     String::new()
 }
+
 
 fn comparable_word(word: &str) -> String {
     word.trim_matches(|character: char| ".,!?;:()[]{}\"'".contains(character))
@@ -364,6 +375,18 @@ mod tests {
     fn stable_prefix_handles_a_new_sentence() {
         assert_eq!(
             stable_prefix("hello world", "hello world today"),
+            "hello world"
+        );
+        assert_eq!(
+            stable_prefix("hello world", "new sentence starts"),
+            ""
+        );
+    }
+
+    #[test]
+    fn punctuation_only_revision_keeps_words_stable() {
+        assert_eq!(
+            stable_prefix("hello world", "hello world."),
             "hello world"
         );
     }
