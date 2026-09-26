@@ -5,8 +5,11 @@ describe("Vaktum state machine", () => {
   it("accepts the operational transitions", () => {
     expect(canTransition("idle", "recording")).toBe(true);
     expect(canTransition("recording", "processing")).toBe(true);
+    expect(canTransition("recording", "transcribing")).toBe(true);
     expect(canTransition("processing", "transcribing")).toBe(true);
+    expect(canTransition("transcribing", "recording")).toBe(true);
     expect(canTransition("transcribing", "inserting")).toBe(true);
+    expect(canTransition("inserting", "recording")).toBe(true);
     expect(canTransition("inserting", "idle")).toBe(true);
     expect(canTransition("recording", "error")).toBe(true);
     expect(canTransition("processing", "error")).toBe(true);
