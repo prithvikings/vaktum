@@ -66,7 +66,8 @@ fn insert_text_windows(target_window: i64, text: &str) -> Result<(), String> {
     unsafe {
         validate_target_window(hwnd)?;
 
-        let previous_clipboard = get_clipboard::<String>(clipboard_win::formats::Unicode).ok();
+        let previous_clipboard: Option<String> =
+            get_clipboard(clipboard_win::formats::Unicode).ok();
 
         set_clipboard_string(text)
             .map_err(|error| format!("Clipboard operation failed: {error}"))?;
