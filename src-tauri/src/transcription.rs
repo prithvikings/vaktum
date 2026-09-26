@@ -13,7 +13,6 @@ pub struct TranscriptionResult {
 }
 
 pub struct WhisperTranscriber {
-    model_path: PathBuf,
     language: String,
     context: WhisperContext,
 }
@@ -41,7 +40,6 @@ impl WhisperTranscriber {
         .map_err(|e| anyhow!("Unable to load Whisper model: {e}"))?;
 
         Ok(Self {
-            model_path,
             language: config.language.clone(),
             context,
         })
