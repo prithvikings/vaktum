@@ -141,6 +141,7 @@ fn run(
     }
 
     let path = audio::stop(&recorder)?;
+    let _ = app.emit("vaktum://streaming-transcribing", ());
     let final_result = transcriber.transcribe(&path)?;
 
     let remaining = reconcile_final(&committed, &final_result.final_transcript);
