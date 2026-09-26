@@ -1,4 +1,4 @@
-use crate::{audio, cleanup, config::AppConfig, history, insertion, transcription};
+use crate::{audio, cleanup, config::AppConfig, context::DictationContext, history, insertion, transcription};
 use anyhow::{anyhow, Result};
 use std::{
     sync::{
@@ -29,6 +29,7 @@ struct StreamingCompleted {
 pub struct StreamingSession {
     stop: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,
+    context: DictationContext,
 }
 
 impl StreamingSession {
@@ -37,6 +38,7 @@ impl StreamingSession {
         recorder: Arc<Mutex<audio::Recorder>>,
         target_window: i64,
         config: AppConfig,
+        context: DictationContext,
     ) -> Result<Self> {
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = Arc::clone(&stop);
@@ -65,6 +67,7 @@ impl StreamingSession {
         Ok(Self {
             stop,
             handle: Some(handle),
+            context,
         })
     }
 
