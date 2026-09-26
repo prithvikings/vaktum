@@ -39,7 +39,7 @@ export default function App() {
   }, []);
 
   const transcribe = async () => {
-    if (!recordingPath || state === "transcribing") return;
+    if (!recordingPath || state === "transcribing" || state === "inserting") return;
 
     setError("");
     setTranscript("");
@@ -48,6 +48,21 @@ export default function App() {
     try {
       const result = await commands.transcribeRecording(recordingPath);
       setTranscript(result);
+      setState("idle");
+    } catch (cause) {
+      setError(String(cause));
+      setState("error");
+    }
+  };
+
+  const insertTranscript = async () => {
+    if (!transcript.trim() || state === "inserting" || state === "transcribing") return;
+
+    setError("");
+    setState("inserting");
+
+    try {
+      await commands.insertText(transcript);
       setState("idle");
     } catch (cause) {
       setError(String(cause));
@@ -74,9 +89,11 @@ export default function App() {
               ? "Recording stopped"
               : state === "transcribing"
                 ? "Transcribing..."
-                : state === "error"
-                  ? "Error"
-                  : "Ready"}
+                : state === "inserting"
+                  ? "Inserting..."
+                  : state === "error"
+                    ? "Error"
+                    : "Ready"}
         </strong>
         {error && <p className="error">{error}</p>}
       </section>
@@ -91,7 +108,11 @@ export default function App() {
         <section className="card">
           <small>Latest recording</small>
           <code>{recordingPath}</code>
-          <button type="button" onClick={() => void transcribe()} disabled={state === "transcribing"}>
+          <button
+            type="button"
+            onClick={() => void transcribe()}
+            disabled={state === "transcribing" || state === "inserting"}
+          >
             {state === "transcribing" ? "Transcribing..." : "Transcribe"}
           </button>
         </section>
@@ -101,6 +122,13 @@ export default function App() {
         <section className="card">
           <small>Transcript</small>
           <p>{transcript}</p>
+          <button
+            type="button"
+            onClick={() => void insertTranscript()}
+            disabled={state === "inserting" || state === "transcribing"}
+          >
+            {state === "inserting" ? "Inserting..." : "Insert into focused app"}
+          </button>
         </section>
       )}
     </main>
