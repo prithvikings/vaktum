@@ -81,7 +81,15 @@ impl WhisperTranscriber {
         whisper_rs::convert_integer_to_float_audio(&samples, &mut audio)
             .map_err(|e| anyhow!("Whisper audio conversion failed: {e}"))?;
 
-        eprintln!("[INFO] Starting transcription: {}", wav_path.display());
+        self.transcribe_samples(&audio)
+    }
+
+    pub fn transcribe_samples(&mut self, audio: &[f32]) -> Result<TranscriptionResult> {
+        if audio.is_empty() {
+            return Err(anyhow!("Whisper transcription failed: no audio samples"));
+        }
+
+        eprintln!("[INFO] Starting transcription");
 
         let mut state = self
             .context
@@ -97,13 +105,14 @@ impl WhisperTranscriber {
         });
         params.set_translate(false);
         params.set_no_context(true);
+        params.set_single_segment(false);
         params.set_print_special(false);
         params.set_print_progress(false);
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
 
         state
-            .full(params, &audio)
+            .full(params, audio)
             .map_err(|e| anyhow!("Whisper transcription failed: {e}"))?;
 
         let raw_transcript = state
@@ -126,13 +135,12 @@ impl WhisperTranscriber {
             ));
         }
 
-        eprintln!("[INFO] Transcription completed");
-
         Ok(TranscriptionResult {
             raw_transcript,
             final_transcript,
         })
     }
+
 }
 
 pub fn latest_recording_path() -> Result<PathBuf> {
