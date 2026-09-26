@@ -42,7 +42,7 @@ pub fn classify_process_name(process_name: &str) -> ApplicationKind {
     }
 
     match executable.to_ascii_lowercase().as_str() {
-        "code.exe" | "code-insiders.exe" => ApplicationKind::VsCode,
+        "code.exe" | "code-insiders.exe" | "code - insiders.exe" => ApplicationKind::VsCode,
         "notepad.exe" => ApplicationKind::Notepad,
         "chrome.exe" | "msedge.exe" | "firefox.exe" => ApplicationKind::Browser,
         "windowsterminal.exe" | "wt.exe" | "cmd.exe" | "powershell.exe" | "pwsh.exe" => {
