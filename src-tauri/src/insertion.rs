@@ -105,7 +105,10 @@ fn insert_text_windows(target_window: i64, text: &str) -> Result<(), String> {
 
         let clipboard_sequence = clipboard_win::raw::seq_num();
 
-        ensure_target_foreground(hwnd)?;
+        if let Err(error) = ensure_target_foreground(hwnd) {
+            restore_clipboard(previous_clipboard.as_deref(), clipboard_sequence);
+            return Err(error);
+        }
 
         if let Err(error) = send_paste() {
             restore_clipboard(previous_clipboard.as_deref(), clipboard_sequence);
