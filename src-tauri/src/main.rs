@@ -4,6 +4,7 @@ mod audio;
 mod cleanup;
 mod config;
 mod context;
+mod dictionary;
 mod history;
 mod insertion;
 mod streaming;
@@ -47,11 +48,10 @@ fn recording_start(state: State<'_, AppState>) -> Result<(), String> {
         .microphone
         .clone();
 
-    audio::start(&state.recorder, &microphone)
-        .map_err(|error| {
-            eprintln!("[ERROR] recording start: {error}");
-            "Unable to start recording. Please check your microphone.".to_owned()
-        })
+    audio::start(&state.recorder, &microphone).map_err(|error| {
+        eprintln!("[ERROR] recording start: {error}");
+        "Unable to start recording. Please check your microphone.".to_owned()
+    })
 }
 
 #[tauri::command]
@@ -107,6 +107,8 @@ async fn transcribe_recording(
         }
     })?;
 
+    let final_transcript = dictionary::apply(&dictionary::load(), &result.final_transcript);
+
     let history_error = if config.history_enabled {
         let entry = history::HistoryEntry {
             timestamp: SystemTime::now()
@@ -114,7 +116,7 @@ async fn transcribe_recording(
                 .map(|duration| duration.as_secs().to_string())
                 .unwrap_or_else(|_| "0".to_owned()),
             raw_transcript: result.raw_transcript.clone(),
-            final_transcript: result.final_transcript.clone(),
+            final_transcript: final_transcript.clone(),
         };
 
         match history::append(entry) {
@@ -130,7 +132,7 @@ async fn transcribe_recording(
 
     Ok(TranscriptionResponse {
         raw_transcript: result.raw_transcript,
-        final_transcript: result.final_transcript,
+        final_transcript,
         history_error,
     })
 }
@@ -242,6 +244,24 @@ fn save_config(
 #[tauri::command]
 fn get_history() -> Result<Vec<history::HistoryEntry>, String> {
     Ok(history::load())
+}
+
+#[tauri::command]
+fn get_dictionary() -> Vec<dictionary::DictionaryEntry> {
+    dictionary::load()
+}
+
+#[tauri::command]
+fn add_dictionary_entry(
+    source: String,
+    replacement: String,
+) -> Result<Vec<dictionary::DictionaryEntry>, String> {
+    dictionary::add(&source, &replacement)
+}
+
+#[tauri::command]
+fn remove_dictionary_entry(source: String) -> Result<Vec<dictionary::DictionaryEntry>, String> {
+    dictionary::remove(&source)
 }
 
 #[tauri::command]
@@ -507,6 +527,9 @@ fn main() {
             get_config,
             save_config,
             get_history,
+            get_dictionary,
+            add_dictionary_entry,
+            remove_dictionary_entry,
             input_devices,
         ])
         .run(tauri::generate_context!())

@@ -1,4 +1,4 @@
-use crate::{audio, cleanup, config::AppConfig, context::DictationContext, history, insertion, transcription};
+use crate::{audio, cleanup, config::AppConfig, context::DictationContext, dictionary, history, insertion, transcription};
 use anyhow::{anyhow, Result};
 use std::{
     sync::{
@@ -75,9 +75,6 @@ impl StreamingSession {
         })
     }
 
-    // Kept as the session's read-only context API for the next context-aware
-    // milestone. It is intentionally unused by M6 so context detection cannot
-    // influence transcription or insertion behavior.
     #[allow(dead_code)]
     pub fn context(&self) -> &DictationContext {
         &self.context
@@ -99,6 +96,7 @@ fn run(
     stop: Arc<AtomicBool>,
 ) -> Result<()> {
     let mut transcriber = transcription::WhisperTranscriber::from_config(&config)?;
+    let dictionary = dictionary::load();
     let mut previous_hypothesis = String::new();
     let mut committed = String::new();
 
@@ -119,9 +117,11 @@ fn run(
                         }
 
                         let stable = stable_prefix(&previous_hypothesis, &hypothesis);
+                        let safe_stable = dictionary::safe_prefix(&dictionary, &stable);
+                        let dictionary_stable = dictionary::apply(&dictionary, &safe_stable);
 
-                        if !stable.is_empty() {
-                            let delta = delta_after_committed(&committed, &stable);
+                        if !dictionary_stable.is_empty() {
+                            let delta = delta_after_committed(&committed, &dictionary_stable);
                             if !delta.is_empty() {
                                 let insert_delta = join_delta(&committed, &delta);
                                 let _ = app.emit("vaktum://streaming-inserting", ());
@@ -141,10 +141,12 @@ fn run(
                         }
 
                         previous_hypothesis = hypothesis.clone();
+                        let cleaned = cleanup::clean_transcript(&hypothesis);
+                        let live_transcript = dictionary::apply(&dictionary, &cleaned);
                         let _ = app.emit(
                             "vaktum://streaming-updated",
                             StreamingUpdate {
-                                transcript: cleanup::clean_transcript(&hypothesis),
+                                transcript: live_transcript,
                             },
                         );
                         let _ = app.emit("vaktum://streaming-resume", ());
@@ -170,7 +172,9 @@ fn run(
         Err(error) => return Err(error),
     };
 
-    let remaining = reconcile_final(&committed, &final_result.final_transcript);
+    let cleaned_final = cleanup::clean_transcript(&final_result.final_transcript);
+    let dictionary_final = dictionary::apply(&dictionary, &cleaned_final);
+    let remaining = reconcile_final(&committed, &dictionary_final);
     if !remaining.is_empty() {
         let delta = join_delta(&committed, &remaining);
         let _ = app.emit("vaktum://streaming-inserting", ());
@@ -178,14 +182,14 @@ fn run(
             .map_err(|error| anyhow!("Final insertion failed: {error}"))?;
     }
 
-    let history_error = if config.history_enabled && !final_result.final_transcript.trim().is_empty() {
+    let history_error = if config.history_enabled && !dictionary_final.trim().is_empty() {
         let entry = history::HistoryEntry {
             timestamp: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map(|duration| duration.as_secs().to_string())
                 .unwrap_or_else(|_| "0".to_owned()),
             raw_transcript: final_result.raw_transcript.clone(),
-            final_transcript: final_result.final_transcript.clone(),
+            final_transcript: dictionary_final.clone(),
         };
 
         match history::append(entry) {
@@ -203,7 +207,7 @@ fn run(
         "vaktum://streaming-completed",
         StreamingCompleted {
             raw_transcript: final_result.raw_transcript,
-            final_transcript: final_result.final_transcript,
+            final_transcript: dictionary_final,
             history_error,
         },
     );
@@ -251,10 +255,6 @@ pub fn stable_prefix(previous: &str, current: &str) -> String {
     if common_len > 0 {
         let common = &current[..common_len];
 
-        // If the previous hypothesis ended at a word boundary and the new
-        // hypothesis continues it with whitespace or punctuation, the whole
-        // previous hypothesis is stable. If it is still extending the same
-        // word, only the earlier complete words are stable.
         if common_len == previous.len() {
             if current.len() == common_len {
                 return common
@@ -287,8 +287,6 @@ pub fn stable_prefix(previous: &str, current: &str) -> String {
         }
     }
 
-    // Rolling windows eventually stop sharing the same beginning. In that
-    // case, use the longest suffix/prefix word overlap.
     let previous_words = previous.split_whitespace().collect::<Vec<_>>();
     let current_words = current.split_whitespace().collect::<Vec<_>>();
 
@@ -305,7 +303,6 @@ pub fn stable_prefix(previous: &str, current: &str) -> String {
 
     String::new()
 }
-
 
 pub fn delta_after_committed(committed: &str, stable: &str) -> String {
     if let Some(delta) = stable.strip_prefix(committed) {
@@ -328,7 +325,6 @@ pub fn delta_after_committed(committed: &str, stable: &str) -> String {
 
     String::new()
 }
-
 
 fn comparable_word(word: &str) -> String {
     word.trim_matches(|character: char| ".,!?;:()[]{}\"'".contains(character))
@@ -398,30 +394,18 @@ mod tests {
 
     #[test]
     fn stable_prefix_handles_a_new_sentence() {
-        assert_eq!(
-            stable_prefix("hello world", "hello world today"),
-            "hello world"
-        );
-        assert_eq!(
-            stable_prefix("hello world", "new sentence starts"),
-            ""
-        );
+        assert_eq!(stable_prefix("hello world", "hello world today"), "hello world");
+        assert_eq!(stable_prefix("hello world", "new sentence starts"), "");
     }
 
     #[test]
     fn punctuation_only_revision_keeps_words_stable() {
-        assert_eq!(
-            stable_prefix("hello world", "hello world."),
-            "hello world"
-        );
+        assert_eq!(stable_prefix("hello world", "hello world."), "hello world");
     }
 
     #[test]
     fn delta_does_not_duplicate_committed_text() {
-        assert_eq!(
-            delta_after_committed("hello", "hello world"),
-            "world"
-        );
+        assert_eq!(delta_after_committed("hello", "hello world"), "world");
     }
 
     #[test]
@@ -438,47 +422,26 @@ mod tests {
 
     #[test]
     fn transcript_revision_does_not_create_a_false_delta() {
-        assert_eq!(
-            stable_prefix("hello world", "hello there"),
-            "hello"
-        );
+        assert_eq!(stable_prefix("hello world", "hello there"), "hello");
         assert_eq!(delta_after_committed("hello", "hello"), "");
     }
 
     #[test]
     fn shifted_rolling_windows_produce_stable_overlap() {
-        assert_eq!(
-            stable_prefix("hello how are you", "how are you doing"),
-            "how are you"
-        );
-        assert_eq!(
-            delta_after_committed("hello how are", "how are you"),
-            "you"
-        );
+        assert_eq!(stable_prefix("hello how are you", "how are you doing"), "how are you");
+        assert_eq!(delta_after_committed("hello how are", "how are you"), "you");
     }
 
     #[test]
     fn punctuation_changes_do_not_break_rolling_overlap() {
-        assert_eq!(
-            stable_prefix("hello there world", "there world, today"),
-            "there world,"
-        );
-        assert_eq!(
-            delta_after_committed("hello there", "there world, today"),
-            "world, today"
-        );
+        assert_eq!(stable_prefix("hello there world", "there world, today"), "there world,");
+        assert_eq!(delta_after_committed("hello there", "there world, today"), "world, today");
     }
 
     #[test]
     fn final_transcript_reconciles_without_duplication() {
-        assert_eq!(
-            reconcile_final("hello world", "hello world today"),
-            "today"
-        );
-        assert_eq!(
-            reconcile_final("hello world today", "hello world"),
-            ""
-        );
+        assert_eq!(reconcile_final("hello world", "hello world today"), "today");
+        assert_eq!(reconcile_final("hello world today", "hello world"), "");
     }
 
     #[test]
