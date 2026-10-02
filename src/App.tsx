@@ -133,9 +133,9 @@ export default function App() {
           canTransition(current, "transcribing") ? transition(current, "transcribing") : current,
         );
       }),
-      listen<{ transcript: string }>("vaktum://streaming-updated", (event) => {
+      listen<{ transcript: string; raw_transcript: string }>("vaktum://streaming-updated", (event) => {
         setTranscript(event.payload.transcript);
-        setRawTranscript(event.payload.transcript);
+        setRawTranscript(event.payload.raw_transcript);
       }),
       listen<{ raw_transcript: string; final_transcript: string; history_error?: string | null }>(
         "vaktum://streaming-completed",
