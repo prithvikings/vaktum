@@ -59,6 +59,37 @@ pub fn insert_text(target_window: i64, text: &str) -> Result<(), String> {
     }
 }
 
+pub fn press_enter(target_window: i64, count: u8) -> Result<(), String> {
+    if count == 0 {
+        return Ok(());
+    }
+
+    #[cfg(windows)]
+    {
+        press_enter_windows(target_window, count)
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = target_window;
+        let _ = count;
+        Err("Voice command input is only supported on Windows".to_owned())
+    }
+}
+
+pub fn delete_last_word(target_window: i64) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        delete_last_word_windows(target_window)
+    }
+
+    #[cfg(not(windows))]
+    {
+        let _ = target_window;
+        Err("Voice command input is only supported on Windows".to_owned())
+    }
+}
+
 #[cfg(windows)]
 fn insert_text_windows(target_window: i64, text: &str) -> Result<(), String> {
     let hwnd = target_window as HWND;
@@ -74,23 +105,7 @@ fn insert_text_windows(target_window: i64, text: &str) -> Result<(), String> {
 
         let clipboard_sequence = clipboard_win::raw::seq_num();
 
-        if IsIconic(hwnd) != 0 {
-            ShowWindow(hwnd, SW_RESTORE);
-        }
-
-        if GetForegroundWindow() != hwnd {
-            if SetForegroundWindow(hwnd) == 0 {
-                restore_clipboard(previous_clipboard.as_deref(), clipboard_sequence);
-                return Err("Could not activate the previously focused application".to_owned());
-            }
-
-            thread::sleep(Duration::from_millis(50));
-
-            if GetForegroundWindow() != hwnd {
-                restore_clipboard(previous_clipboard.as_deref(), clipboard_sequence);
-                return Err("Could not activate the previously focused application".to_owned());
-            }
-        }
+        ensure_target_foreground(hwnd)?;
 
         if let Err(error) = send_paste() {
             restore_clipboard(previous_clipboard.as_deref(), clipboard_sequence);
@@ -105,6 +120,70 @@ fn insert_text_windows(target_window: i64, text: &str) -> Result<(), String> {
 
         Ok(())
     }
+}
+
+#[cfg(windows)]
+fn press_enter_windows(target_window: i64, count: u8) -> Result<(), String> {
+    let hwnd = target_window as HWND;
+
+    unsafe {
+        ensure_target_foreground(hwnd)?;
+
+        for _ in 0..count {
+            let inputs = [
+                keyboard_input(0x0D, 0),
+                keyboard_input(0x0D, KEYEVENTF_KEYUP),
+            ];
+            send_keyboard_inputs(&inputs)?;
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(windows)]
+fn delete_last_word_windows(target_window: i64) -> Result<(), String> {
+    let hwnd = target_window as HWND;
+
+    unsafe {
+        ensure_target_foreground(hwnd)?;
+
+        let inputs = [
+            keyboard_input(VK_CONTROL, 0),
+            keyboard_input(0x10, 0),
+            keyboard_input(0x25, 0),
+            keyboard_input(0x25, KEYEVENTF_KEYUP),
+            keyboard_input(0x10, KEYEVENTF_KEYUP),
+            keyboard_input(VK_CONTROL, KEYEVENTF_KEYUP),
+            keyboard_input(0x08, 0),
+            keyboard_input(0x08, KEYEVENTF_KEYUP),
+        ];
+
+        send_keyboard_inputs(&inputs)
+    }
+}
+
+#[cfg(windows)]
+unsafe fn ensure_target_foreground(hwnd: HWND) -> Result<(), String> {
+    validate_target_window(hwnd)?;
+
+    if IsIconic(hwnd) != 0 {
+        ShowWindow(hwnd, SW_RESTORE);
+    }
+
+    if GetForegroundWindow() != hwnd {
+        if SetForegroundWindow(hwnd) == 0 {
+            return Err("Could not activate the previously focused application".to_owned());
+        }
+
+        thread::sleep(Duration::from_millis(50));
+
+        if GetForegroundWindow() != hwnd {
+            return Err("Could not activate the previously focused application".to_owned());
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -136,6 +215,11 @@ unsafe fn send_paste() -> Result<(), String> {
         keyboard_input(VK_CONTROL, KEYEVENTF_KEYUP),
     ];
 
+    send_keyboard_inputs(&inputs)
+}
+
+#[cfg(windows)]
+unsafe fn send_keyboard_inputs(inputs: &[INPUT]) -> Result<(), String> {
     let sent = SendInput(
         inputs.len() as u32,
         inputs.as_ptr(),
@@ -143,7 +227,7 @@ unsafe fn send_paste() -> Result<(), String> {
     );
 
     if sent != inputs.len() as u32 {
-        return Err("Paste/input operation failed".to_owned());
+        return Err("Keyboard/input operation failed".to_owned());
     }
 
     Ok(())
@@ -184,7 +268,7 @@ fn restore_clipboard(previous: Option<&str>, sequence_after_insert: Option<std::
 
 #[cfg(test)]
 mod tests {
-    use super::insert_text;
+    use super::{insert_text, press_enter};
 
     #[test]
     fn rejects_empty_text() {
@@ -196,5 +280,10 @@ mod tests {
     fn rejects_whitespace_only_text() {
         let error = insert_text(0, "   \n\t").expect_err("whitespace should be rejected");
         assert_eq!(error, "No transcript available for insertion");
+    }
+
+    #[test]
+    fn zero_enter_count_is_a_no_op() {
+        press_enter(0, 0).expect("zero enter count should not require Windows input");
     }
 }
