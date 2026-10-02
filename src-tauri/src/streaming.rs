@@ -1,4 +1,7 @@
-use crate::{audio, cleanup, config::AppConfig, context::DictationContext, dictionary, history, insertion, transcription};
+use crate::{
+    audio, cleanup, config::AppConfig, context::DictationContext, dictionary, history, insertion,
+    transcription, voice_commands,
+};
 use anyhow::{anyhow, Result};
 use std::{
     sync::{
@@ -100,6 +103,7 @@ fn run(
     let dictionary = dictionary::load();
     let mut previous_hypothesis = String::new();
     let mut committed = String::new();
+    let mut executed_command = None;
     let mut pass = 0_u64;
 
     while !stop.load(Ordering::Acquire) {
@@ -133,41 +137,74 @@ fn run(
                             continue;
                         }
 
-                        let stable = stable_prefix(&previous_hypothesis, &normalized_hypothesis);
-                        let safe_stable = dictionary::safe_prefix(&dictionary, &stable);
-                        let dictionary_stable = dictionary::apply(&dictionary, &safe_stable);
-                        let delta = delta_after_committed(&committed, &dictionary_stable);
+                        let command = voice_commands::parse_command(&normalized_hypothesis);
+                        let command_is_stable = command.is_some()
+                            && previous_hypothesis.eq_ignore_ascii_case(&normalized_hypothesis);
+                        let command_candidate = command.is_some()
+                            || voice_commands::is_command_prefix(&normalized_hypothesis);
                         let mut insertion_status = "not-needed";
+                        let mut command_status = "not-command";
 
-                        if !delta.is_empty() {
-                            let insert_delta = join_delta(&committed, &delta);
-                            let _ = app.emit("vaktum://streaming-inserting", ());
-                            match insertion::insert_text(target_window, &insert_delta) {
-                                Ok(()) => {
-                                    committed = join_delta(&committed, &delta);
-                                    insertion_status = "success";
-                                }
-                                Err(error) => {
-                                    insertion_status = "failed";
-                                    eprintln!(
-                                        "[ERROR] streaming insertion: {error}"
-                                    );
-                                    let _ = app.emit(
-                                        "vaktum://streaming-error",
-                                        "Unable to insert streaming text into the target application.",
-                                    );
+                        if let Some(command) = command {
+                            command_status = "pending";
+                            if command_is_stable && executed_command != Some(command) {
+                                eprintln!("[INFO] Voice command detected: {command:?}");
+                                let _ = app.emit("vaktum://streaming-inserting", ());
+                                match voice_commands::execute(command, target_window) {
+                                    Ok(()) => {
+                                        executed_command = Some(command);
+                                        command_status = "executed";
+                                    }
+                                    Err(error) => {
+                                        command_status = "failed";
+                                        eprintln!("[ERROR] voice command: {error}");
+                                        let _ = app.emit(
+                                            "vaktum://streaming-error",
+                                            "Unable to execute the voice command in the target application.",
+                                        );
+                                    }
                                 }
                             }
-                        }
+                        } else if !command_candidate {
+                            let stable = stable_prefix(&previous_hypothesis, &normalized_hypothesis);
+                            let safe_stable = dictionary::safe_prefix(&dictionary, &stable);
+                            let dictionary_stable = dictionary::apply(&dictionary, &safe_stable);
+                            let delta = delta_after_committed(&committed, &dictionary_stable);
 
-                        eprintln!(
-                            "[STREAM] pass={pass} audio_ms={audio_ms} raw={:?} normalized={:?} stable={:?} committed={:?} delta={:?} insert={insertion_status}",
-                            raw_hypothesis,
-                            normalized_hypothesis,
-                            dictionary_stable,
-                            committed,
-                            delta,
-                        );
+                            if !delta.is_empty() {
+                                let insert_delta = join_delta(&committed, &delta);
+                                let _ = app.emit("vaktum://streaming-inserting", ());
+                                match insertion::insert_text(target_window, &insert_delta) {
+                                    Ok(()) => {
+                                        committed = join_delta(&committed, &delta);
+                                        insertion_status = "success";
+                                    }
+                                    Err(error) => {
+                                        insertion_status = "failed";
+                                        eprintln!("[ERROR] streaming insertion: {error}");
+                                        let _ = app.emit(
+                                            "vaktum://streaming-error",
+                                            "Unable to insert streaming text into the target application.",
+                                        );
+                                    }
+                                }
+                            }
+
+                            eprintln!(
+                                "[STREAM] pass={pass} audio_ms={audio_ms} raw={:?} normalized={:?} stable={:?} committed={:?} delta={:?} insert={insertion_status}",
+                                raw_hypothesis,
+                                normalized_hypothesis,
+                                stable,
+                                committed,
+                                delta,
+                            );
+                        } else {
+                            eprintln!(
+                                "[STREAM] pass={pass} audio_ms={audio_ms} raw={:?} normalized={:?} command={command_status}",
+                                raw_hypothesis,
+                                normalized_hypothesis,
+                            );
+                        }
 
                         previous_hypothesis = normalized_hypothesis.clone();
                         let _ = app.emit(
@@ -204,12 +241,29 @@ fn run(
 
     let cleaned_final = cleanup::clean_transcript(&final_result.final_transcript);
     let dictionary_final = dictionary::apply(&dictionary, &cleaned_final);
-    let remaining = reconcile_final(&committed, &dictionary_final);
-    if !remaining.is_empty() {
-        let delta = join_delta(&committed, &remaining);
-        let _ = app.emit("vaktum://streaming-inserting", ());
-        insertion::insert_text(target_window, &delta)
-            .map_err(|error| anyhow!("Final insertion failed: {error}"))?;
+
+    if let Some(command) = voice_commands::parse_command(&dictionary_final) {
+        if executed_command != Some(command) {
+            eprintln!("[INFO] Voice command detected: {command:?}");
+            let _ = app.emit("vaktum://streaming-inserting", ());
+            if let Err(error) = voice_commands::execute(command, target_window) {
+                eprintln!("[ERROR] voice command: {error}");
+                let _ = app.emit(
+                    "vaktum://streaming-error",
+                    "Unable to execute the voice command in the target application.",
+                );
+            } else {
+                executed_command = Some(command);
+            }
+        }
+    } else {
+        let remaining = reconcile_final(&committed, &dictionary_final);
+        if !remaining.is_empty() {
+            let delta = join_delta(&committed, &remaining);
+            let _ = app.emit("vaktum://streaming-inserting", ());
+            insertion::insert_text(target_window, &delta)
+                .map_err(|error| anyhow!("Final insertion failed: {error}"))?;
+        }
     }
 
     let history_error = if config.history_enabled && !dictionary_final.trim().is_empty() {
