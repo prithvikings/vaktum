@@ -9,6 +9,7 @@ mod history;
 mod insertion;
 mod streaming;
 mod transcription;
+mod voice_commands;
 
 use std::{
     sync::{Arc, Mutex},
@@ -107,9 +108,25 @@ async fn transcribe_recording(
         }
     })?;
 
-    let final_transcript = dictionary::apply(&dictionary::load(), &result.final_transcript);
+    let mut final_transcript = dictionary::apply(&dictionary::load(), &result.final_transcript);
 
-    let history_error = if config.history_enabled {
+    if let Some(command) = voice_commands::parse_command(&final_transcript) {
+        eprintln!("[INFO] Voice command detected: {command:?}");
+        let target_window = state
+            .target_window
+            .lock()
+            .map_err(|_| "No target application was captured.".to_owned())?
+            .ok_or_else(|| "No target application was captured.".to_owned())?;
+
+        voice_commands::execute(command, target_window).map_err(|error| {
+            eprintln!("[ERROR] voice command: {error}");
+            "Unable to execute the voice command in the target application.".to_owned()
+        })?;
+
+        final_transcript.clear();
+    }
+
+    let history_error = if config.history_enabled && !final_transcript.trim().is_empty() {
         let entry = history::HistoryEntry {
             timestamp: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
