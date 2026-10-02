@@ -1,4 +1,4 @@
-use crate::{audio, cleanup, config::AppConfig, context::DictationContext, history, insertion, transcription};
+use crate::{audio, cleanup, config::AppConfig, context::DictationContext, dictionary, history, insertion, transcription};
 use anyhow::{anyhow, Result};
 use std::{
     sync::{
@@ -17,6 +17,7 @@ const MIN_AUDIO_MS: u64 = 900;
 #[derive(Debug, Clone, serde::Serialize)]
 struct StreamingUpdate {
     transcript: String,
+    raw_transcript: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -75,9 +76,6 @@ impl StreamingSession {
         })
     }
 
-    // Kept as the session's read-only context API for the next context-aware
-    // milestone. It is intentionally unused by M6 so context detection cannot
-    // influence transcription or insertion behavior.
     #[allow(dead_code)]
     pub fn context(&self) -> &DictationContext {
         &self.context
@@ -99,58 +97,92 @@ fn run(
     stop: Arc<AtomicBool>,
 ) -> Result<()> {
     let mut transcriber = transcription::WhisperTranscriber::from_config(&config)?;
+    let dictionary = dictionary::load();
     let mut previous_hypothesis = String::new();
     let mut committed = String::new();
+    let mut pass = 0_u64;
 
     while !stop.load(Ordering::Acquire) {
         let (samples, sample_rate) = audio::snapshot_recent(&recorder, ROLLING_WINDOW_MS)?;
+        let audio_ms = if sample_rate == 0 {
+            0
+        } else {
+            ((samples.len() as u64) * 1_000) / sample_rate as u64
+        };
 
         if samples.len() >= ((sample_rate as u64 * MIN_AUDIO_MS) / 1000) as usize {
             let audio = resample_linear(&samples, sample_rate, 16_000);
             if !audio.is_empty() {
+                pass += 1;
                 let _ = app.emit("vaktum://streaming-transcribing", ());
-                match transcriber.transcribe_samples(&audio) {
-                    Ok(result) => {
-                        let hypothesis = result.raw_transcript.trim().to_owned();
-                        if hypothesis.is_empty() {
-                            previous_hypothesis.clear();
+                match transcriber.transcribe_samples_for_streaming(&audio) {
+                    Ok(transcription::StreamingTranscription::NoResult) => {
+                        eprintln!(
+                            "[STREAM] pass={pass} audio_ms={audio_ms} result=no-result"
+                        );
+                    }
+                    Ok(transcription::StreamingTranscription::Transcript(result)) => {
+                        let raw_hypothesis = result.raw_transcript.trim().to_owned();
+                        let normalized_hypothesis = normalize_hypothesis(&dictionary, &raw_hypothesis);
+
+                        if normalized_hypothesis.is_empty() {
+                            eprintln!(
+                                "[STREAM] pass={pass} audio_ms={audio_ms} result=no-result"
+                            );
                             thread::sleep(Duration::from_millis(POLL_INTERVAL_MS));
                             continue;
                         }
 
-                        let stable = stable_prefix(&previous_hypothesis, &hypothesis);
+                        let stable = stable_prefix(&previous_hypothesis, &normalized_hypothesis);
+                        let safe_stable = dictionary::safe_prefix(&dictionary, &stable);
+                        let dictionary_stable = dictionary::apply(&dictionary, &safe_stable);
+                        let delta = delta_after_committed(&committed, &dictionary_stable);
+                        let mut insertion_status = "not-needed";
 
-                        if !stable.is_empty() {
-                            let delta = delta_after_committed(&committed, &stable);
-                            if !delta.is_empty() {
-                                let insert_delta = join_delta(&committed, &delta);
-                                let _ = app.emit("vaktum://streaming-inserting", ());
-                                match insertion::insert_text(target_window, &insert_delta) {
-                                    Ok(()) => {
-                                        committed = join_delta(&committed, &delta);
-                                    }
-                                    Err(error) => {
-                                        eprintln!("[ERROR] streaming insertion: {error}");
-                                        let _ = app.emit(
-                                            "vaktum://streaming-error",
-                                            "Unable to insert streaming text into the target application.",
-                                        );
-                                    }
+                        if !delta.is_empty() {
+                            let insert_delta = join_delta(&committed, &delta);
+                            let _ = app.emit("vaktum://streaming-inserting", ());
+                            match insertion::insert_text(target_window, &insert_delta) {
+                                Ok(()) => {
+                                    committed = join_delta(&committed, &delta);
+                                    insertion_status = "success";
+                                }
+                                Err(error) => {
+                                    insertion_status = "failed";
+                                    eprintln!(
+                                        "[ERROR] streaming insertion: {error}"
+                                    );
+                                    let _ = app.emit(
+                                        "vaktum://streaming-error",
+                                        "Unable to insert streaming text into the target application.",
+                                    );
                                 }
                             }
                         }
 
-                        previous_hypothesis = hypothesis.clone();
+                        eprintln!(
+                            "[STREAM] pass={pass} audio_ms={audio_ms} raw={:?} normalized={:?} stable={:?} committed={:?} delta={:?} insert={insertion_status}",
+                            raw_hypothesis,
+                            normalized_hypothesis,
+                            dictionary_stable,
+                            committed,
+                            delta,
+                        );
+
+                        previous_hypothesis = normalized_hypothesis.clone();
                         let _ = app.emit(
                             "vaktum://streaming-updated",
                             StreamingUpdate {
-                                transcript: cleanup::clean_transcript(&hypothesis),
+                                transcript: normalized_hypothesis,
+                                raw_transcript: raw_hypothesis,
                             },
                         );
                         let _ = app.emit("vaktum://streaming-resume", ());
                     }
                     Err(error) => {
-                        eprintln!("[WARN] streaming transcription pass skipped: {error}");
+                        eprintln!(
+                            "[WARN] streaming transcription pass skipped: {error}"
+                        );
                     }
                 }
             }
@@ -170,7 +202,9 @@ fn run(
         Err(error) => return Err(error),
     };
 
-    let remaining = reconcile_final(&committed, &final_result.final_transcript);
+    let cleaned_final = cleanup::clean_transcript(&final_result.final_transcript);
+    let dictionary_final = dictionary::apply(&dictionary, &cleaned_final);
+    let remaining = reconcile_final(&committed, &dictionary_final);
     if !remaining.is_empty() {
         let delta = join_delta(&committed, &remaining);
         let _ = app.emit("vaktum://streaming-inserting", ());
@@ -178,14 +212,14 @@ fn run(
             .map_err(|error| anyhow!("Final insertion failed: {error}"))?;
     }
 
-    let history_error = if config.history_enabled && !final_result.final_transcript.trim().is_empty() {
+    let history_error = if config.history_enabled && !dictionary_final.trim().is_empty() {
         let entry = history::HistoryEntry {
             timestamp: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map(|duration| duration.as_secs().to_string())
                 .unwrap_or_else(|_| "0".to_owned()),
             raw_transcript: final_result.raw_transcript.clone(),
-            final_transcript: final_result.final_transcript.clone(),
+            final_transcript: dictionary_final.clone(),
         };
 
         match history::append(entry) {
@@ -203,12 +237,17 @@ fn run(
         "vaktum://streaming-completed",
         StreamingCompleted {
             raw_transcript: final_result.raw_transcript,
-            final_transcript: final_result.final_transcript,
+            final_transcript: dictionary_final,
             history_error,
         },
     );
 
     Ok(())
+}
+
+fn normalize_hypothesis(dictionary: &[dictionary::DictionaryEntry], raw: &str) -> String {
+    let cleaned = cleanup::clean_transcript(raw);
+    dictionary::apply(dictionary, &cleaned)
 }
 
 fn is_empty_transcription_error(error: &anyhow::Error) -> bool {
@@ -237,8 +276,12 @@ fn resample_linear(input: &[f32], input_rate: u32, output_rate: u32) -> Vec<f32>
 }
 
 pub fn stable_prefix(previous: &str, current: &str) -> String {
-    if previous.is_empty() || current.is_empty() {
+    if current.is_empty() {
         return String::new();
+    }
+
+    if previous.is_empty() {
+        return stable_prefix_from_first_hypothesis(current);
     }
 
     let common_len = previous
@@ -251,10 +294,6 @@ pub fn stable_prefix(previous: &str, current: &str) -> String {
     if common_len > 0 {
         let common = &current[..common_len];
 
-        // If the previous hypothesis ended at a word boundary and the new
-        // hypothesis continues it with whitespace or punctuation, the whole
-        // previous hypothesis is stable. If it is still extending the same
-        // word, only the earlier complete words are stable.
         if common_len == previous.len() {
             if current.len() == common_len {
                 return common
@@ -287,8 +326,6 @@ pub fn stable_prefix(previous: &str, current: &str) -> String {
         }
     }
 
-    // Rolling windows eventually stop sharing the same beginning. In that
-    // case, use the longest suffix/prefix word overlap.
     let previous_words = previous.split_whitespace().collect::<Vec<_>>();
     let current_words = current.split_whitespace().collect::<Vec<_>>();
 
@@ -306,6 +343,27 @@ pub fn stable_prefix(previous: &str, current: &str) -> String {
     String::new()
 }
 
+fn stable_prefix_from_first_hypothesis(current: &str) -> String {
+    let trimmed = current.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    if trimmed
+        .chars()
+        .last()
+        .is_some_and(|character| ".!?".contains(character))
+    {
+        return trimmed.to_owned();
+    }
+
+    let words = trimmed.split_whitespace().collect::<Vec<_>>();
+    if words.len() <= 1 {
+        return String::new();
+    }
+
+    words[..words.len() - 1].join(" ")
+}
 
 pub fn delta_after_committed(committed: &str, stable: &str) -> String {
     if let Some(delta) = stable.strip_prefix(committed) {
@@ -328,7 +386,6 @@ pub fn delta_after_committed(committed: &str, stable: &str) -> String {
 
     String::new()
 }
-
 
 fn comparable_word(word: &str) -> String {
     word.trim_matches(|character: char| ".,!?;:()[]{}\"'".contains(character))
@@ -387,6 +444,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn first_hypothesis_commits_safe_complete_words() {
+        assert_eq!(stable_prefix("", "hello world"), "hello");
+        assert_eq!(delta_after_committed("", "hello"), "hello");
+    }
+
+    #[test]
+    fn first_hypothesis_with_one_word_waits_for_more_context() {
+        assert_eq!(stable_prefix("", "hello"), "");
+    }
+
+    #[test]
+    fn first_hypothesis_with_sentence_punctuation_can_commit_all() {
+        assert_eq!(stable_prefix("", "hello world."), "hello world.");
+    }
+
+    #[test]
     fn stable_prefix_waits_for_a_word_boundary() {
         assert_eq!(stable_prefix("hello wor", "hello world"), "hello");
     }
@@ -402,10 +475,7 @@ mod tests {
             stable_prefix("hello world", "hello world today"),
             "hello world"
         );
-        assert_eq!(
-            stable_prefix("hello world", "new sentence starts"),
-            ""
-        );
+        assert_eq!(stable_prefix("hello world", "new sentence starts"), "");
     }
 
     #[test]
@@ -464,8 +534,8 @@ mod tests {
             "there world,"
         );
         assert_eq!(
-            delta_after_committed("hello there", "there world, today"),
-            "world, today"
+            delta_after_committed("hello there", "there world,"),
+            "world,"
         );
     }
 

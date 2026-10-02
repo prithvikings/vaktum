@@ -6,10 +6,17 @@ use std::path::{Path, PathBuf};
 use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
 const MODEL_ENV: &str = "VAKTUM_WHISPER_MODEL";
+
 #[derive(Debug, Serialize)]
 pub struct TranscriptionResult {
     pub raw_transcript: String,
     pub final_transcript: String,
+}
+
+#[derive(Debug)]
+pub enum StreamingTranscription {
+    Transcript(TranscriptionResult),
+    NoResult,
 }
 
 pub struct WhisperTranscriber {
@@ -142,6 +149,24 @@ impl WhisperTranscriber {
         })
     }
 
+    pub fn transcribe_samples_for_streaming(
+        &mut self,
+        audio: &[f32],
+    ) -> Result<StreamingTranscription> {
+        match self.transcribe_samples(audio) {
+            Ok(result) => Ok(StreamingTranscription::Transcript(result)),
+            Err(error) if is_empty_transcription_error(&error) => {
+                Ok(StreamingTranscription::NoResult)
+            }
+            Err(error) => Err(error),
+        }
+    }
+}
+
+fn is_empty_transcription_error(error: &anyhow::Error) -> bool {
+    let message = error.to_string();
+    message.contains("no transcript was produced")
+        || message.contains("cleanup produced an empty transcript")
 }
 
 pub fn latest_recording_path() -> Result<PathBuf> {

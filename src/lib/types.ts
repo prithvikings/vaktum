@@ -30,6 +30,11 @@ export type AudioDevice = {
   name: string;
 };
 
+export type DictionaryEntry = {
+  source: string;
+  replacement: string;
+};
+
 export type ApplicationKind =
   | "vscode"
   | "notepad"

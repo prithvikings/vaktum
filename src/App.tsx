@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import type { AppConfig, AudioDevice, DictationContext, HistoryEntry, VaktumState } from "./lib/types";
+import type {
+  AppConfig,
+  AudioDevice,
+  DictionaryEntry,
+  DictationContext,
+  HistoryEntry,
+  VaktumState,
+} from "./lib/types";
 import { canTransition, transition } from "./lib/state-machine";
 import { commands } from "./lib/tauri";
 
@@ -43,6 +50,9 @@ export default function App() {
   const [rawTranscript, setRawTranscript] = useState("");
   const [error, setError] = useState("");
   const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [dictionary, setDictionary] = useState<DictionaryEntry[]>([]);
+  const [dictionarySource, setDictionarySource] = useState("");
+  const [dictionaryReplacement, setDictionaryReplacement] = useState("");
   const [config, setConfig] = useState<AppConfig>(DEFAULT_CONFIG);
   const [draftConfig, setDraftConfig] = useState<AppConfig>(DEFAULT_CONFIG);
   const [devices, setDevices] = useState<AudioDevice[]>([]);
@@ -70,6 +80,14 @@ export default function App() {
     }
   };
 
+  const loadDictionary = async () => {
+    try {
+      setDictionary(await commands.getDictionary());
+    } catch (cause) {
+      setError(String(cause));
+    }
+  };
+
   useEffect(() => {
     void Promise.all([
       commands.latestRecordingPath().then(setRecordingPath).catch(() => undefined),
@@ -78,6 +96,7 @@ export default function App() {
         setDraftConfig(loaded);
       }).catch(() => undefined),
       commands.getHistory().then(setHistory).catch(() => undefined),
+      commands.getDictionary().then(setDictionary).catch(() => undefined),
       commands.inputDevices().then(setDevices).catch(() => undefined),
     ]);
 
@@ -114,9 +133,9 @@ export default function App() {
           canTransition(current, "transcribing") ? transition(current, "transcribing") : current,
         );
       }),
-      listen<{ transcript: string }>("vaktum://streaming-updated", (event) => {
+      listen<{ transcript: string; raw_transcript: string }>("vaktum://streaming-updated", (event) => {
         setTranscript(event.payload.transcript);
-        setRawTranscript(event.payload.transcript);
+        setRawTranscript(event.payload.raw_transcript);
       }),
       listen<{ raw_transcript: string; final_transcript: string; history_error?: string | null }>(
         "vaktum://streaming-completed",
@@ -146,6 +165,7 @@ export default function App() {
       listen<string>("vaktum://navigate", (event) => {
         setView(event.payload === "settings" ? "settings" : "history");
         void loadHistory();
+        void loadDictionary();
       }),
     ]).then((listeners) => {
       unlisten = listeners;
@@ -221,6 +241,29 @@ export default function App() {
     }
   };
 
+  const addDictionaryEntry = async () => {
+    setError("");
+
+    try {
+      const updated = await commands.addDictionaryEntry(dictionarySource, dictionaryReplacement);
+      setDictionary(updated);
+      setDictionarySource("");
+      setDictionaryReplacement("");
+    } catch (cause) {
+      setError(String(cause));
+    }
+  };
+
+  const removeDictionaryEntry = async (source: string) => {
+    setError("");
+
+    try {
+      setDictionary(await commands.removeDictionaryEntry(source));
+    } catch (cause) {
+      setError(String(cause));
+    }
+  };
+
   const groupedHistory = useMemo(() => {
     const groups = new Map<string, HistoryEntry[]>();
     for (const entry of history) {
@@ -252,7 +295,7 @@ export default function App() {
       <nav className="nav">
         <button type="button" className={view === "main" ? "active" : ""} onClick={() => setView("main")}>Dictation</button>
         <button type="button" className={view === "history" ? "active" : ""} onClick={() => { setView("history"); void loadHistory(); }}>History</button>
-        <button type="button" className={view === "settings" ? "active" : ""} onClick={() => setView("settings")}>Settings</button>
+        <button type="button" className={view === "settings" ? "active" : ""} onClick={() => { setView("settings"); void loadDictionary(); }}>Settings</button>
       </nav>
 
       {view === "main" && (
@@ -384,6 +427,52 @@ export default function App() {
 
           <button type="button" onClick={() => void saveSettings()}>Save Settings</button>
           {settingsSaved && <p className="success">Settings saved.</p>}
+
+          <hr />
+
+          <div>
+            <small>User Dictionary</small>
+            <p>Correct preferred vocabulary after Whisper transcription. Entries are stored locally.</p>
+          </div>
+
+          <label>
+            Spoken term
+            <input
+              value={dictionarySource}
+              onChange={(event) => setDictionarySource(event.target.value)}
+              placeholder="vaktum"
+            />
+          </label>
+
+          <label>
+            Replacement
+            <input
+              value={dictionaryReplacement}
+              onChange={(event) => setDictionaryReplacement(event.target.value)}
+              placeholder="Vaktum"
+            />
+          </label>
+
+          <button
+            type="button"
+            onClick={() => void addDictionaryEntry()}
+            disabled={!dictionarySource.trim() || !dictionaryReplacement.trim()}
+          >
+            Add Dictionary Entry
+          </button>
+
+          {dictionary.length === 0 ? (
+            <p>No dictionary entries yet.</p>
+          ) : (
+            <div className="history-list">
+              {dictionary.map((entry) => (
+                <article className="history-item" key={entry.source}>
+                  <p><strong>{entry.source}</strong> → {entry.replacement}</p>
+                  <button type="button" onClick={() => void removeDictionaryEntry(entry.source)}>Remove</button>
+                </article>
+              ))}
+            </div>
+          )}
         </section>
       )}
     </main>
