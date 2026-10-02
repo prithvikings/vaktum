@@ -1,4 +1,4 @@
-use crate::{audio, cleanup, config::AppConfig, history, insertion, transcription};
+use crate::{audio, cleanup, config::AppConfig, context::DictationContext, history, insertion, transcription};
 use anyhow::{anyhow, Result};
 use std::{
     sync::{
@@ -29,6 +29,11 @@ struct StreamingCompleted {
 pub struct StreamingSession {
     stop: Arc<AtomicBool>,
     handle: Option<JoinHandle<()>>,
+    // P2-M1 establishes the immutable context boundary for a dictation session.
+    // Later context-aware milestones consume this snapshot; M6 itself must not
+    // recompute application context while streaming.
+    #[allow(dead_code)]
+    context: DictationContext,
 }
 
 impl StreamingSession {
@@ -37,6 +42,7 @@ impl StreamingSession {
         recorder: Arc<Mutex<audio::Recorder>>,
         target_window: i64,
         config: AppConfig,
+        context: DictationContext,
     ) -> Result<Self> {
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = Arc::clone(&stop);
@@ -65,7 +71,16 @@ impl StreamingSession {
         Ok(Self {
             stop,
             handle: Some(handle),
+            context,
         })
+    }
+
+    // Kept as the session's read-only context API for the next context-aware
+    // milestone. It is intentionally unused by M6 so context detection cannot
+    // influence transcription or insertion behavior.
+    #[allow(dead_code)]
+    pub fn context(&self) -> &DictationContext {
+        &self.context
     }
 
     pub fn stop(mut self) {

@@ -3,6 +3,7 @@
 mod audio;
 mod cleanup;
 mod config;
+mod context;
 mod history;
 mod insertion;
 mod streaming;
@@ -307,6 +308,8 @@ fn register_hotkey(
                         }
                     };
 
+                    let dictation_context = context::detect(target_window_id);
+
                     let configured = config
                         .lock()
                         .map(|value| value.clone())
@@ -320,6 +323,7 @@ fn register_hotkey(
                             recorder.clone(),
                             target_window_id,
                             configured,
+                            dictation_context.clone(),
                         ) {
                             Ok(session) => {
                                 if let Ok(mut active) = streaming_session.lock() {
@@ -327,6 +331,7 @@ fn register_hotkey(
                                 }
                                 eprintln!("[INFO] Streaming dictation started");
                                 let _ = handle.emit("vaktum://recording-started", ());
+                                let _ = handle.emit("vaktum://context-detected", dictation_context);
                             }
                             Err(error) => {
                                 eprintln!("[ERROR] streaming start: {error}");

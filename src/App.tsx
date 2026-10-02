@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import type { AppConfig, AudioDevice, HistoryEntry, VaktumState } from "./lib/types";
+import type { AppConfig, AudioDevice, DictationContext, HistoryEntry, VaktumState } from "./lib/types";
 import { canTransition, transition } from "./lib/state-machine";
 import { commands } from "./lib/tauri";
 
@@ -47,6 +47,7 @@ export default function App() {
   const [draftConfig, setDraftConfig] = useState<AppConfig>(DEFAULT_CONFIG);
   const [devices, setDevices] = useState<AudioDevice[]>([]);
   const [settingsSaved, setSettingsSaved] = useState(false);
+  const [dictationContext, setDictationContext] = useState<DictationContext | null>(null);
 
   const move = (to: VaktumState) => {
     setState((current) => {
@@ -88,7 +89,11 @@ export default function App() {
         setTranscript("");
         setRawTranscript("");
         setRecordingPath("");
+        setDictationContext(null);
         move("recording");
+      }),
+      listen<DictationContext>("vaktum://context-detected", (event) => {
+        setDictationContext(event.payload);
       }),
       listen<string>("vaktum://recording-stopped", (event) => {
         setRecordingPath(event.payload);
@@ -256,6 +261,9 @@ export default function App() {
             <small>Status</small>
             <strong>{statusLabel}</strong>
             {error && <p className="error">{error}</p>}
+            {dictationContext && (
+              <p>Context: {dictationContext.application} ({dictationContext.process_name || "unknown process"})</p>
+            )}
             {state === "error" && <button type="button" onClick={resetError}>Dismiss error</button>}
           </section>
 

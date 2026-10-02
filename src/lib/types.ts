@@ -29,3 +29,16 @@ export type TranscriptionResult = {
 export type AudioDevice = {
   name: string;
 };
+
+export type ApplicationKind =
+  | "vscode"
+  | "notepad"
+  | "browser"
+  | "terminal"
+  | "unknown";
+
+export type DictationContext = {
+  application: ApplicationKind;
+  process_name: string;
+  captured_at: number;
+};
